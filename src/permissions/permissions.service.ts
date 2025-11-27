@@ -14,6 +14,7 @@ import { ApprovePermissionDto } from './dto/approve-permission.dto';
 import { RejectPermissionDto } from './dto/reject-permission.dto';
 import { PermissionStatus } from '../common/enums/permission-status.enum';
 import { UserRole } from '../common/enums/user-role.enum';
+import { PermissionType } from 'src/common/enums/permission-type.enum';
 
 @Injectable()
 export class PermissionsService {
@@ -29,7 +30,7 @@ export class PermissionsService {
   ) {}
 
   // EMPLOYEE: özün üçün icazə yarat
-  async createForEmployee(
+    async createForEmployee(
     currentUser: { userId: number; companyId: number },
     dto: CreatePermissionDto,
   ): Promise<Permission> {
@@ -48,12 +49,19 @@ export class PermissionsService {
       throw new ForbiddenException('İstifadəçi bu şirkətə aid deyil');
     }
 
+    // ⭐ Policy check
+    await this.validatePolicyForNewPermission(
+      company,
+      employee.id,
+      dto,
+    );
+
     const perm = this.permRepo.create({
       company,
       employee,
       type: dto.type,
-      startDate: dto.startDate,
-      endDate: dto.endDate,
+      startDate: new Date(dto.startDate),
+      endDate: dto.endDate ? new Date(dto.endDate) : undefined,
       startTime: dto.startTime,
       endTime: dto.endTime,
       reason: dto.reason,
@@ -216,5 +224,220 @@ export class PermissionsService {
     perm.decidedAt = new Date();
 
     return this.permRepo.save(perm);
+  }
+
+
+    // Helper: iki tarix arasındakı gün sayı (ən azı 1)
+  private countDays(start: Date, end?: Date): number {
+    const s = new Date(start);
+    const e = new Date(end ?? start);
+    s.setHours(0, 0, 0, 0);
+    e.setHours(0, 0, 0, 0);
+    const diffMs = e.getTime() - s.getTime();
+    return Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
+  }
+
+  // Overlap check
+  private async ensureNoOverlap(
+    companyId: number,
+    employeeId: number,
+    startDate: Date,
+    endDate: Date | undefined,
+  ): Promise<void> {
+    const qb = this.permRepo
+      .createQueryBuilder('perm')
+      .leftJoin('perm.employee', 'employee')
+      .leftJoin('perm.company', 'company')
+      .where('company.id = :companyId', { companyId })
+      .andWhere('employee.id = :employeeId', { employeeId })
+      .andWhere('perm.status IN (:...statuses)', {
+        statuses: [
+          PermissionStatus.PENDING,
+          PermissionStatus.IN_PROGRESS,
+          PermissionStatus.APPROVED,
+        ],
+      })
+      // tarix interval overlap: (start <= existingEnd) AND (end >= existingStart)
+      .andWhere(
+        '(perm.startDate <= :endDate) AND ( (perm.endDate IS NULL AND perm.startDate >= :startDate) OR (perm.endDate IS NOT NULL AND perm.endDate >= :startDate) )',
+        {
+          startDate,
+          endDate: endDate ?? startDate,
+        },
+      );
+
+    const existing = await qb.getOne();
+    if (existing) {
+      throw new ForbiddenException(
+        'Bu tarix intervalında artıq başqa icazən var (overlap).',
+      );
+    }
+  }
+
+  // Annual leave limit
+  private async ensureAnnualLeaveLimit(
+    company: Company,
+    employeeId: number,
+    startDate: Date,
+    endDate?: Date,
+  ): Promise<void> {
+    const year = startDate.getFullYear();
+    const from = new Date(year, 0, 1);
+    const to = new Date(year, 11, 31);
+
+    const existing = await this.permRepo
+      .createQueryBuilder('perm')
+      .leftJoin('perm.employee', 'employee')
+      .leftJoin('perm.company', 'company')
+      .where('company.id = :companyId', { companyId: company.id })
+      .andWhere('employee.id = :employeeId', { employeeId })
+      .andWhere('perm.type = :type', { type: PermissionType.ANNUAL_LEAVE })
+      .andWhere('perm.status = :status', { status: PermissionStatus.APPROVED })
+      .andWhere('perm.startDate BETWEEN :from AND :to', { from, to })
+      .getMany();
+
+    const usedDays = existing.reduce(
+      (acc, p) => acc + this.countDays(p.startDate, p.endDate),
+      0,
+    );
+
+    const requestedDays = this.countDays(startDate, endDate);
+    const total = usedDays + requestedDays;
+
+    if (total > company.annualLeaveDaysPerYear) {
+      throw new ForbiddenException(
+        `İllik məzuniyyət limitini aşır: istifadə olunmuş ${usedDays} gün, istəyən ${requestedDays} gün, limit ${company.annualLeaveDaysPerYear} gün.`,
+      );
+    }
+  }
+
+  // Remote limit (sadə variant — hər permission 1 gün kimi sayılır və ya date range qədər)
+  private async ensureRemoteLimit(
+    company: Company,
+    employeeId: number,
+    startDate: Date,
+    endDate?: Date,
+  ): Promise<void> {
+    const year = startDate.getFullYear();
+    const month = startDate.getMonth(); // 0-based
+
+    const monthStart = new Date(year, month, 1);
+    const monthEnd = new Date(year, month + 1, 0);
+
+    const existing = await this.permRepo
+      .createQueryBuilder('perm')
+      .leftJoin('perm.employee', 'employee')
+      .leftJoin('perm.company', 'company')
+      .where('company.id = :companyId', { companyId: company.id })
+      .andWhere('employee.id = :employeeId', { employeeId })
+      .andWhere('perm.type = :type', { type: PermissionType.REMOTE_WORK })
+      .andWhere('perm.status IN (:...statuses)', {
+        statuses: [PermissionStatus.PENDING, PermissionStatus.APPROVED],
+      })
+      .andWhere('perm.startDate BETWEEN :from AND :to', {
+        from: monthStart,
+        to: monthEnd,
+      })
+      .getMany();
+
+    const usedDays = existing.reduce(
+      (acc, p) => acc + this.countDays(p.startDate, p.endDate),
+      0,
+    );
+
+    const requestedDays = this.countDays(startDate, endDate);
+    const total = usedDays + requestedDays;
+
+    if (total > company.maxRemoteDaysPerMonth) {
+      throw new ForbiddenException(
+        `Bu ay üçün remote limiti aşılır: istifadə olunmuş ${usedDays} gün, istəyən ${requestedDays} gün, limit ${company.maxRemoteDaysPerMonth} gün.`,
+      );
+    }
+  }
+
+  // Short leave limit (saatla) – sadə: hər permission üçün (endTime-startTime) hesablanır
+  private async ensureShortLeaveLimit(
+    company: Company,
+    employeeId: number,
+    startDate: Date,
+    startTime?: string,
+    endTime?: string,
+  ): Promise<void> {
+    if (!startTime || !endTime) {
+      return;
+    }
+
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    const requestedHours = (eh + eh / 60) - (sh + sm / 60);
+    if (requestedHours <= 0) {
+      throw new ForbiddenException('Short leave üçün saat intervalı yanlışdır.');
+    }
+
+    const year = startDate.getFullYear();
+    const month = startDate.getMonth();
+    const monthStart = new Date(year, month, 1);
+    const monthEnd = new Date(year, month + 1, 0);
+
+    const existing = await this.permRepo
+      .createQueryBuilder('perm')
+      .leftJoin('perm.employee', 'employee')
+      .leftJoin('perm.company', 'company')
+      .where('company.id = :companyId', { companyId: company.id })
+      .andWhere('employee.id = :employeeId', { employeeId })
+      .andWhere('perm.type = :type', { type: PermissionType.SHORT_LEAVE })
+      .andWhere('perm.status IN (:...statuses)', {
+        statuses: [PermissionStatus.PENDING, PermissionStatus.APPROVED],
+      })
+      .andWhere('perm.startDate BETWEEN :from AND :to', {
+        from: monthStart,
+        to: monthEnd,
+      })
+      .getMany();
+
+    // Sadə variant: hər short leave üçün 2 saatlıq default qəbul edə bilərsən,
+    // amma daha real üçün hər birinin saat aralığını entity-yə əlavə edib hesablamaq lazımdır.
+    // Burda assume edək ki, gələcəkdə saxlanıb.
+    const usedHours = 0; // TODO: detallaşdırmaq olar
+
+    const total = usedHours + requestedHours;
+    if (total > company.maxShortLeaveHoursPerMonth) {
+      throw new ForbiddenException(
+        `Short leave aylıq saat limiti aşılır: ${total.toFixed(
+          1,
+        )} saat, limit ${company.maxShortLeaveHoursPerMonth} saat.`,
+      );
+    }
+  }
+
+  private async validatePolicyForNewPermission(
+    company: Company,
+    employeeId: number,
+    dto: CreatePermissionDto,
+  ): Promise<void> {
+    const startDate = new Date(dto.startDate);
+    const endDate = dto.endDate ? new Date(dto.endDate) : undefined;
+
+    if (!company.allowOverlap) {
+      await this.ensureNoOverlap(company.id, employeeId, startDate, endDate);
+    }
+
+    if (dto.type === PermissionType.ANNUAL_LEAVE) {
+      await this.ensureAnnualLeaveLimit(company, employeeId, startDate, endDate);
+    }
+
+    if (dto.type === PermissionType.REMOTE_WORK) {
+      await this.ensureRemoteLimit(company, employeeId, startDate, endDate);
+    }
+
+    if (dto.type === PermissionType.SHORT_LEAVE) {
+      await this.ensureShortLeaveLimit(
+        company,
+        employeeId,
+        startDate,
+        dto.startTime,
+        dto.endTime,
+      );
+    }
   }
 }
