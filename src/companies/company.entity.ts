@@ -1,6 +1,10 @@
 import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
+import { Permission } from '../permissions/permission.entity';
+
+
+
 
 @Entity('companies')
 export class Company {
@@ -27,6 +31,9 @@ export class Company {
 
   @OneToMany(() => Department, (dept) => dept.company)
   departments: Department[];
+
+  @OneToMany(() => Permission, (perm) => perm.company)
+  permissions: Permission[];
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;

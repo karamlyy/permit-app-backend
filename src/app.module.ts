@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { CompaniesModule } from './companies/companies.module';
 import { DepartmentsModule } from './departments/departments.module';
 import { UsersModule } from './users/users.module';
+import { Permission } from './permissions/permission.entity';
+import { PermissionsModule } from './permissions/permissions.module';
 
 
 @Module({
@@ -22,13 +24,14 @@ import { UsersModule } from './users/users.module';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Company, User, Department],
+      entities: [Company, User, Department, Permission],
       synchronize: true,
     }),
     AuthModule,
     CompaniesModule,
     DepartmentsModule,
     UsersModule,
+    PermissionsModule,
   ],
 })
 export class AppModule {}

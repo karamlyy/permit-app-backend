@@ -9,6 +9,8 @@ import { Company } from '../companies/company.entity';
 import { UserRole } from '../common/enums/user-role.enum';
 import { UserStatus } from '../common/enums/user-status.enum';
 import { Department } from '../departments/department.entity';
+import { Permission } from 'src/permissions/permission.entity';
+
 
 @Entity('users')
 export class User {
@@ -53,4 +55,7 @@ export class User {
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
+
+  @OneToMany(() => Permission, (perm) => perm.employee)
+  permissions: Permission[];
 }
