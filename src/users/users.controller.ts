@@ -1,6 +1,9 @@
 import {
   Body,
   Controller,
+  Param,
+  ParseIntPipe,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -8,6 +11,7 @@ import { AuthGuard } from '@nestjs/passport';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
@@ -41,6 +45,25 @@ export class UsersController {
     @Body() dto: CreateUserDto,
   ) {
     return this.usersService.createUserForCompany(currentUser, dto);
+  }
+
+  @Patch(':id/deactivate')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @ApiOperation({
+    summary: 'İstifadəçini soft delete (status = INACTIVE) edir',
+  })
+  @ApiOkResponse({
+    description: 'İstifadəçi deaktiv edildi',
+    type: UserResponseDto,
+  })
+  deactivate(
+    @CurrentUser() currentUser: any,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.usersService.deactivateUser(
+      { companyId: currentUser.companyId, role: currentUser.role },
+      id,
+    );
   }
   
 }
