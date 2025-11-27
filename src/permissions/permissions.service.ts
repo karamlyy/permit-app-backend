@@ -15,12 +15,15 @@ import { RejectPermissionDto } from './dto/reject-permission.dto';
 import { PermissionStatus } from '../common/enums/permission-status.enum';
 import { UserRole } from '../common/enums/user-role.enum';
 import { PermissionType } from 'src/common/enums/permission-type.enum';
+import { PermissionApproval } from './permission-approval.entity';
 
 @Injectable()
 export class PermissionsService {
-  constructor(
+    constructor(
     @InjectRepository(Permission)
     private readonly permRepo: Repository<Permission>,
+    @InjectRepository(PermissionApproval)
+    private readonly approvalRepo: Repository<PermissionApproval>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
     @InjectRepository(User)
@@ -149,7 +152,7 @@ export class PermissionsService {
   }
 
   // APPROVE
-  async approve(
+    async approve(
     currentUser: { userId: number; companyId: number; role: UserRole },
     permissionId: number,
     dto: ApprovePermissionDto,
@@ -169,26 +172,73 @@ export class PermissionsService {
       permissionId,
     );
 
-    if (perm.status !== PermissionStatus.PENDING) {
+    if (
+      [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
+        perm.status,
+      )
+    ) {
       throw new ForbiddenException(
-        'Yalnız PENDING statusunda olan icazə təsdiqlənə bilər',
+        'Bu icazə artıq yekun vəziyyətdədir (APPROVED/REJECTED).',
       );
     }
 
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
+      relations: ['department', 'department.manager'],
     });
+    if (!approver) {
+      throw new ForbiddenException('Approver tapılmadı');
+    }
 
-    perm.status = PermissionStatus.APPROVED;
-    perm.approvedBy = approver ?? undefined;
-    perm.managerComment = dto.managerComment;
-    perm.decidedAt = new Date();
+    const chain = await this.getApprovalChainForPermission(
+      currentUser.companyId,
+      perm.employee,
+      perm.type,
+    );
+
+    const history = await this.getApprovalHistory(perm.id);
+    const nextStepIndex = history.length; // 0-based index
+    const expectedRole = chain[nextStepIndex];
+
+    if (!expectedRole) {
+      // artıq bütün step-lər işlənib – bu halda approve etməyə çalışmaq səhvdir
+      throw new ForbiddenException('Bu icazə artıq təsdiq zəncirini tamamlayıb.');
+    }
+
+    if (currentUser.role !== expectedRole) {
+      throw new ForbiddenException(
+        `Bu addım üçün gözlənilən rol: ${expectedRole}, səndə isə: ${currentUser.role}.`,
+      );
+    }
+
+    // Tarixçəyə addım əlavə et
+    const approval = this.approvalRepo.create({
+      permission: perm,
+      approver,
+      role: currentUser.role,
+      stepNumber: nextStepIndex + 1,
+      status: PermissionStatus.APPROVED,
+      comment: dto.managerComment,
+    });
+    await this.approvalRepo.save(approval);
+
+    const isLastStep = nextStepIndex === chain.length - 1;
+
+    if (isLastStep) {
+      perm.status = PermissionStatus.APPROVED;
+      perm.approvedBy = approver;
+      perm.managerComment = dto.managerComment;
+      perm.decidedAt = new Date();
+    } else {
+      perm.status = PermissionStatus.IN_PROGRESS;
+      perm.managerComment = dto.managerComment ?? perm.managerComment;
+    }
 
     return this.permRepo.save(perm);
   }
 
   // REJECT
-  async reject(
+    async reject(
     currentUser: { userId: number; companyId: number; role: UserRole },
     permissionId: number,
     dto: RejectPermissionDto,
@@ -208,18 +258,50 @@ export class PermissionsService {
       permissionId,
     );
 
-    if (perm.status !== PermissionStatus.PENDING) {
+    if (
+      [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
+        perm.status,
+      )
+    ) {
       throw new ForbiddenException(
-        'Yalnız PENDING statusunda olan icazə rədd edilə bilər',
+        'Bu icazə artıq yekun vəziyyətdədir (APPROVED/REJECTED).',
       );
     }
 
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
     });
+    if (!approver) {
+      throw new ForbiddenException('Approver tapılmadı');
+    }
+
+    const chain = await this.getApprovalChainForPermission(
+      currentUser.companyId,
+      perm.employee,
+      perm.type,
+    );
+    const history = await this.getApprovalHistory(perm.id);
+    const nextStepIndex = history.length;
+    const expectedRole = chain[nextStepIndex];
+
+    if (!expectedRole || currentUser.role !== expectedRole) {
+      throw new ForbiddenException(
+        `Bu addım üçün gözlənilən rol: ${expectedRole}, səndə isə: ${currentUser.role}.`,
+      );
+    }
+
+    const approval = this.approvalRepo.create({
+      permission: perm,
+      approver,
+      role: currentUser.role,
+      stepNumber: nextStepIndex + 1,
+      status: PermissionStatus.REJECTED,
+      comment: dto.managerComment,
+    });
+    await this.approvalRepo.save(approval);
 
     perm.status = PermissionStatus.REJECTED;
-    perm.approvedBy = approver ?? undefined;
+    perm.approvedBy = approver;
     perm.managerComment = dto.managerComment;
     perm.decidedAt = new Date();
 
@@ -440,4 +522,58 @@ export class PermissionsService {
       );
     }
   }
+
+    // Sadə approval chain generator
+  // Real həyatda bunu company / department / permissionType üzrə konfiqurable edə bilərsən.
+  private async getApprovalChainForPermission(
+    companyId: number,
+    employee: User,
+    type: PermissionType,
+  ): Promise<UserRole[]> {
+    // Sadə qayda:
+    // SHORT_LEAVE & REMOTE_WORK: Manager → HR
+    // ANNUAL / SICK / UNPAID / BUSINESS_TRIP: Manager → HR → COMPANY_ADMIN
+    const base: UserRole[] = [UserRole.MANAGER, UserRole.HR];
+
+    const longTypes = [
+      PermissionType.ANNUAL_LEAVE,
+      PermissionType.SICK_LEAVE,
+      PermissionType.UNPAID_LEAVE,
+      PermissionType.BUSINESS_TRIP,
+    ];
+
+    if (longTypes.includes(type)) {
+      base.push(UserRole.COMPANY_ADMIN);
+    }
+
+    // Əgər employee-nin departamentində manager yoxdursa, chain-dən MANAGER-i çıxara bilərik.
+    const relations = await this.usersRepo.findOne({
+      where: { id: employee.id },
+      relations: ['department', 'department.manager'],
+    });
+
+    const hasManager =
+      relations?.department && relations.department.manager
+        ? true
+        : false;
+
+    if (!hasManager) {
+      return base.filter((r) => r !== UserRole.MANAGER);
+    }
+
+    return base;
+  }
+
+  private async getApprovalHistory(
+    permissionId: number,
+  ): Promise<PermissionApproval[]> {
+    return this.approvalRepo.find({
+      where: { permission: { id: permissionId } },
+      order: { stepNumber: 'ASC' },
+      relations: ['approver'],
+    });
+  }
+
+
+  
 }
