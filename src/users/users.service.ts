@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,6 +12,7 @@ import { Department } from '../departments/department.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from '../common/enums/user-role.enum';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UserStatus } from 'src/common/enums/user-status.enum';
 
 @Injectable()
 export class UsersService {
@@ -97,6 +99,67 @@ export class UsersService {
       department.manager = saved;
       await this.deptRepo.save(department);
     }
+
+    return this.toUserResponse(saved);
+  }
+
+  async deactivateUser(
+    currentUser: { companyId: number; role: UserRole },
+    userId: number,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+      relations: ['company'],
+    });
+
+    if (!user || user.company.id !== currentUser.companyId) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    // HR başqa COMPANY_ADMIN-i deaktiv edə bilməsin
+    if (
+      currentUser.role === UserRole.HR &&
+      user.role === UserRole.COMPANY_ADMIN
+    ) {
+      throw new ForbiddenException(
+        'HR Company Admin istifadəçisini deaktiv edə bilməz',
+      );
+    }
+
+    // Özünü deaktiv etməyə icazə verib-verməmək sənə qalır, istəsən qadağan edə bilərik
+    // if (currentUser.userId === user.id) { ... }
+
+    user.status = UserStatus.INACTIVE;
+    const saved = await this.usersRepo.save(user);
+
+    return this.toUserResponse(saved);
+  }
+
+  async activateUser(
+    currentUser: { companyId: number; role: UserRole },
+    userId: number,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+      relations: ['company'],
+    });
+
+    if (!user || user.company.id !== currentUser.companyId) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    // HR yenə də COMPANY_ADMIN üzərində əməliyyat edə bilməsin
+    if (
+      currentUser.role === UserRole.HR &&
+      user.role === UserRole.COMPANY_ADMIN
+    ) {
+      throw new ForbiddenException(
+        'HR Company Admin istifadəçisini aktiv edə bilməz',
+      );
+    }
+
+    user.status = UserStatus.ACTIVE;
+    const saved = await this.usersRepo.save(user);
 
     return this.toUserResponse(saved);
   }

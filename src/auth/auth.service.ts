@@ -14,6 +14,7 @@ import { LoginDto } from './dto/login.dto';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { UserRole } from '../common/enums/user-role.enum';
+import { UserStatus } from 'src/common/enums/user-status.enum';
 
 @Injectable()
 export class AuthService {
@@ -105,6 +106,13 @@ export class AuthService {
     const isMatch = await bcrypt.compare(dto.password, user.password);
     if (!isMatch) {
       throw new UnauthorizedException('Email və ya şifrə yanlışdır');
+    }
+
+    // ⭐ Burada status check əlavə edirik
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException(
+        'İstifadəçi deaktiv edilib, sistemə giriş icazəsi yoxdur',
+      );
     }
 
     const token = await this.signAccessToken(user);
