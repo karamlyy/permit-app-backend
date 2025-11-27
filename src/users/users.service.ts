@@ -134,4 +134,33 @@ export class UsersService {
 
     return this.toUserResponse(saved);
   }
+
+  async activateUser(
+    currentUser: { companyId: number; role: UserRole },
+    userId: number,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+      relations: ['company'],
+    });
+
+    if (!user || user.company.id !== currentUser.companyId) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    // HR yenə də COMPANY_ADMIN üzərində əməliyyat edə bilməsin
+    if (
+      currentUser.role === UserRole.HR &&
+      user.role === UserRole.COMPANY_ADMIN
+    ) {
+      throw new ForbiddenException(
+        'HR Company Admin istifadəçisini aktiv edə bilməz',
+      );
+    }
+
+    user.status = UserStatus.ACTIVE;
+    const saved = await this.usersRepo.save(user);
+
+    return this.toUserResponse(saved);
+  }
 }

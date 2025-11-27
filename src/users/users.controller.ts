@@ -65,5 +65,24 @@ export class UsersController {
       id,
     );
   }
+
+  @Patch(':id/activate')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @ApiOperation({
+    summary: 'İstifadəçini yenidən aktiv (status = ACTIVE) edir',
+  })
+  @ApiOkResponse({
+    description: 'İstifadəçi aktiv edildi',
+    type: UserResponseDto,
+  })
+  activate(
+    @CurrentUser() currentUser: any,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.usersService.activateUser(
+      { companyId: currentUser.companyId, role: currentUser.role },
+      id,
+    );
+  }
   
 }
