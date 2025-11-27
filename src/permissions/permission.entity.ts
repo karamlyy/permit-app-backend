@@ -34,13 +34,13 @@ export class Permission {
   status: PermissionStatus;
 
   @Column({ type: 'date' })
-  startDate: string; // ISO date (YYYY-MM-DD)
+  startDate: Date;
 
   @Column({ type: 'date', nullable: true })
-  endDate?: string;
+  endDate?: Date;
 
   @Column({ type: 'time', nullable: true })
-  startTime?: string; // SHORT_LEAVE üçün
+  startTime?: string;
 
   @Column({ type: 'time', nullable: true })
   endTime?: string;

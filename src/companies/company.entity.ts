@@ -26,6 +26,21 @@ export class Company {
   @Column({ type: 'time', default: '18:00' })
   workEndTime: string;
 
+  @Column({ type: 'int', default: 21 })
+  annualLeaveDaysPerYear: number;
+
+  // Aylıq remote limiti (günlə)
+  @Column({ type: 'int', default: 5 })
+  maxRemoteDaysPerMonth: number;
+
+  // Aylıq short-leave limiti (saat ilə)
+  @Column({ type: 'int', default: 8 })
+  maxShortLeaveHoursPerMonth: number;
+
+  // Eyni tarixdə üst-üstə icazələrə icazə verilsin?
+  @Column({ type: 'bool', default: false })
+  allowOverlap: boolean;
+
   @OneToMany(() => User, (user) => user.company)
   users: User[];
 
@@ -34,6 +49,8 @@ export class Company {
 
   @OneToMany(() => Permission, (perm) => perm.company)
   permissions: Permission[];
+
+
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
