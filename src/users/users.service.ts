@@ -37,6 +37,7 @@ export class UsersService {
     currentUser: { companyId: number; role: UserRole },
     dto: CreateUserDto,
   ): Promise<UserResponseDto> {
+    // HR COMPANY_ADMIN yarada bilməsin
     if (
       currentUser.role === UserRole.HR &&
       dto.role === UserRole.COMPANY_ADMIN
@@ -53,8 +54,8 @@ export class UsersService {
       throw new BadRequestException('Bu email artıq istifadə olunur');
     }
 
-    // ⭐ Burda typeni Department | null edirik
-    let department: Department | null = null;
+    // ⭐ Department: Department | undefined saxlayırıq (null yox!)
+    let department: Department | undefined = undefined;
 
     if (dto.departmentId) {
       const found = await this.deptRepo.findOne({
@@ -76,6 +77,7 @@ export class UsersService {
 
     const hashed = await bcrypt.hash(dto.password, 10);
 
+    // 🟢 Burda TypeORM üçün single obyekt create edirik
     const user = this.usersRepo.create({
       name: dto.name,
       email: dto.email,
@@ -84,11 +86,18 @@ export class UsersService {
       position: dto.position,
       hireDate: dto.hireDate ? new Date(dto.hireDate) : undefined,
       company: { id: currentUser.companyId } as any,
-      // Burda da null-u undefined-ə çeviririk
-      department: department ?? undefined,
+      department, // Department | undefined – null yoxdur
     });
 
+    // 🟢 save(user) – array yox, tək obyekt
     const saved = await this.usersRepo.save(user);
+
+    // ⭐ Əgər MANAGER-dirsə və department varsa → departamentin manager-i et
+    if (saved.role === UserRole.MANAGER && department) {
+      department.manager = saved;
+      await this.deptRepo.save(department);
+    }
+
     return this.toUserResponse(saved);
   }
 }
