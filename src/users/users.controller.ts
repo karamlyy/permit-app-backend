@@ -22,6 +22,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../common/enums/user-role.enum';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
 
 @ApiTags('admin-users')
 @ApiBearerAuth()
@@ -82,6 +83,29 @@ export class UsersController {
     return this.usersService.activateUser(
       { companyId: currentUser.companyId, role: currentUser.role },
       id,
+    );
+  }
+
+
+  @Patch(':id/policy')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @ApiOperation({
+    summary:
+      'İşçi üçün fərdi icazə policy-lərini (illik məzuniyyət, remote limiti və s.) override et',
+  })
+  @ApiOkResponse({
+    description: 'İstifadəçinin policy-si yeniləndi',
+    type: UserResponseDto,
+  })
+  updatePolicy(
+    @CurrentUser() currentUser: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateUserPolicyDto,
+  ) {
+    return this.usersService.updateUserPolicy(
+      { companyId: currentUser.companyId, role: currentUser.role },
+      id,
+      dto,
     );
   }
   

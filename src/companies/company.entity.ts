@@ -3,9 +3,6 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { Permission } from '../permissions/permission.entity';
 
-
-
-
 @Entity('companies')
 export class Company {
   @PrimaryGeneratedColumn()
@@ -26,18 +23,25 @@ export class Company {
   @Column({ type: 'time', default: '18:00' })
   workEndTime: string;
 
+  // ⭐ Policy defaults (şirkət səviyyəsində)
+
+  // İllik məzuniyyət günlərinin default miqdarı
   @Column({ type: 'int', default: 21 })
   annualLeaveDaysPerYear: number;
 
-  // Aylıq remote limiti (günlə)
+  // Remote work ümumiyyətlə aktivdir?
+  @Column({ type: 'bool', default: true })
+  hasRemoteWork: boolean;
+
+  // Ay ərzində maks. remote gün sayı (default)
   @Column({ type: 'int', default: 5 })
   maxRemoteDaysPerMonth: number;
 
-  // Aylıq short-leave limiti (saat ilə)
+  // Short leave üçün aylıq limit (saatla, optional)
   @Column({ type: 'int', default: 8 })
   maxShortLeaveHoursPerMonth: number;
 
-  // Eyni tarixdə üst-üstə icazələrə icazə verilsin?
+  // Overlap icazəsinə default qayda
   @Column({ type: 'bool', default: false })
   allowOverlap: boolean;
 
@@ -49,8 +53,6 @@ export class Company {
 
   @OneToMany(() => Permission, (perm) => perm.company)
   permissions: Permission[];
-
-
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
