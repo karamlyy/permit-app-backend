@@ -1,21 +1,80 @@
-import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  OneToMany,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { Permission } from '../permissions/permission.entity';
+import { CompanySize } from '../common/enums/company-size.enum';
+import { CompanySector } from 'src/common/enums/company-sectors.enum';
+import { Branch } from 'src/branches/branches.entity';
 
 @Entity('companies')
 export class Company {
   @PrimaryGeneratedColumn()
   id: number;
 
+  // Əsas identity sahələri
   @Column({ unique: true })
-  name: string;
+  name: string; // "Skillvania LLC"
 
+  @Column({ nullable: true })
+  legalName?: string; // "Skillvania Məhdud Məsuliyyətli Cəmiyyəti"
+
+  @Column({ type: 'text', nullable: true })
+  description?: string; // Şirkət haqqında qısa info
+
+  @Column({
+    type: 'enum',
+    enum: CompanySector,
+    default: CompanySector.OTHER,
+  })
+  sector: CompanySector;
+
+  @Column({ nullable: true })
+  website?: string;
+
+  @Column({ nullable: true })
+  phone?: string;
+
+  @Column({ nullable: true })
+  email?: string;
+
+  // Ünvan məlumatları (baş ofis üçün)
+  @Column({ nullable: true })
+  country?: string;
+
+  @Column({ nullable: true })
+  city?: string;
+
+  @Column({ nullable: true })
+  addressLine?: string;
+
+  @Column({ nullable: true })
+  postalCode?: string;
+
+  @Column({ nullable: true })
+  logoUrl?: string;
+
+  // İşçi sayı / ölçü
+  @Column({ type: 'int', nullable: true })
+  employeeCount?: number;
+
+  @Column({
+    type: 'enum',
+    enum: CompanySize,
+    default: CompanySize.SMALL,
+  })
+  size: CompanySize;
+
+  // İş saatları və iş günləri ( əvvəldən olan sahələrdən istifadə edirik )
   @Column({ default: 'Asia/Baku' })
   timezone: string;
 
   @Column('simple-array', { default: '1,2,3,4,5' })
-  workingDays: number[];
+  workingDays: number[]; // 1=Mon, 7=Sun
 
   @Column({ type: 'time', default: '09:00' })
   workStartTime: string;
@@ -23,25 +82,19 @@ export class Company {
   @Column({ type: 'time', default: '18:00' })
   workEndTime: string;
 
-  // ⭐ Policy defaults (şirkət səviyyəsində)
-
-  // İllik məzuniyyət günlərinin default miqdarı
+  // ⭐ Policy defaults (səndə artıq var idi, saxlayırıq)
   @Column({ type: 'int', default: 21 })
   annualLeaveDaysPerYear: number;
 
-  // Remote work ümumiyyətlə aktivdir?
   @Column({ type: 'bool', default: true })
   hasRemoteWork: boolean;
 
-  // Ay ərzində maks. remote gün sayı (default)
   @Column({ type: 'int', default: 5 })
   maxRemoteDaysPerMonth: number;
 
-  // Short leave üçün aylıq limit (saatla, optional)
   @Column({ type: 'int', default: 8 })
   maxShortLeaveHoursPerMonth: number;
 
-  // Overlap icazəsinə default qayda
   @Column({ type: 'bool', default: false })
   allowOverlap: boolean;
 
@@ -53,6 +106,9 @@ export class Company {
 
   @OneToMany(() => Permission, (perm) => perm.company)
   permissions: Permission[];
+
+  @OneToMany(() => Branch, (branch) => branch.company)
+  branches: Branch[];
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
