@@ -47,6 +47,25 @@ export class User {
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
   status: UserStatus;
 
+  // 🔽 Employee-level policy overrides (optional sahələr)
+
+  // Bu işçinin illik məzuniyyət günləri (əgər null-dursa, company default)
+  @Column({ type: 'int', nullable: true })
+  customAnnualLeaveDaysPerYear?: number | null;
+
+  // Bu işçiyə remote ümumiyyətlə icazə verilir?
+  // null → şirkətin hasRemoteWork dəyərinə bax
+  @Column({ type: 'bool', nullable: true })
+  customHasRemoteWork?: boolean | null;
+
+  // Bu işçiyə ayda neçə remote gün icazə var? (null → company default)
+  @Column({ type: 'int', nullable: true })
+  customMaxRemoteDaysPerMonth?: number | null;
+
+  // Short leave üçün fərdi limit (null → company default)
+  @Column({ type: 'int', nullable: true })
+  customMaxShortLeaveHoursPerMonth?: number | null;
+
   @Column({ type: 'varchar', nullable: true })
   refreshToken?: string | null;
 

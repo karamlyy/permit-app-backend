@@ -13,6 +13,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from '../common/enums/user-role.enum';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UserStatus } from 'src/common/enums/user-status.enum';
+import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
 
 @Injectable()
 export class UsersService {
@@ -161,6 +162,55 @@ export class UsersService {
     user.status = UserStatus.ACTIVE;
     const saved = await this.usersRepo.save(user);
 
+    return this.toUserResponse(saved);
+  }
+
+  async updateUserPolicy(
+    currentUser: { companyId: number; role: UserRole },
+    userId: number,
+    dto: UpdateUserPolicyDto,
+  ): Promise<UserResponseDto> {
+    // COMPANY_ADMIN və HR icazə verilir
+    if (
+      ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+    ) {
+      throw new ForbiddenException('Bu əməliyyat üçün səlahiyyət yoxdur');
+    }
+
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+      relations: ['company'],
+    });
+
+    if (!user || user.company.id !== currentUser.companyId) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    // HR Company Admin-i dəyişə bilməsin (istəsən, bunu da qoy)
+    if (
+      currentUser.role === UserRole.HR &&
+      user.role === UserRole.COMPANY_ADMIN
+    ) {
+      throw new ForbiddenException(
+        'HR Company Admin istifadəçisinin policy-sini dəyişə bilməz',
+      );
+    }
+
+    if (dto.customAnnualLeaveDaysPerYear !== undefined) {
+      user.customAnnualLeaveDaysPerYear = dto.customAnnualLeaveDaysPerYear;
+    }
+    if (dto.customHasRemoteWork !== undefined) {
+      user.customHasRemoteWork = dto.customHasRemoteWork;
+    }
+    if (dto.customMaxRemoteDaysPerMonth !== undefined) {
+      user.customMaxRemoteDaysPerMonth = dto.customMaxRemoteDaysPerMonth;
+    }
+    if (dto.customMaxShortLeaveHoursPerMonth !== undefined) {
+      user.customMaxShortLeaveHoursPerMonth =
+        dto.customMaxShortLeaveHoursPerMonth;
+    }
+
+    const saved = await this.usersRepo.save(user);
     return this.toUserResponse(saved);
   }
 }

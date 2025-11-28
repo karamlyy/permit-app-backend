@@ -20,7 +20,7 @@ import { UserStatus } from 'src/common/enums/user-status.enum';
 
 @Injectable()
 export class PermissionsService {
-    constructor(
+  constructor(
     @InjectRepository(Permission)
     private readonly permRepo: Repository<Permission>,
     @InjectRepository(PermissionApproval)
@@ -34,7 +34,7 @@ export class PermissionsService {
   ) {}
 
   // EMPLOYEE: özün üçün icazə yarat
-    async createForEmployee(
+  async createForEmployee(
     currentUser: { userId: number; companyId: number },
     dto: CreatePermissionDto,
   ): Promise<Permission> {
@@ -54,15 +54,13 @@ export class PermissionsService {
     }
 
     if (employee.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException('Deaktiv istifadəçi üçün icazə yaradıla bilməz',);
+      throw new ForbiddenException(
+        'Deaktiv istifadəçi üçün icazə yaradıla bilməz',
+      );
     }
 
-    // ⭐ Policy check
-    await this.validatePolicyForNewPermission(
-      company,
-      employee.id,
-      dto,
-    );
+    // ⭐ Policy check – company + employee birgə nəzərə alınır
+    await this.validatePolicyForNewPermission(company, employee, dto);
 
     const perm = this.permRepo.create({
       company,
@@ -80,7 +78,9 @@ export class PermissionsService {
   }
 
   // EMPLOYEE: öz icazələrini gör
-  async findMyPermissions(currentUser: { userId: number }): Promise<Permission[]> {
+  async findMyPermissions(currentUser: {
+    userId: number;
+  }): Promise<Permission[]> {
     return this.permRepo.find({
       where: { employee: { id: currentUser.userId } },
       relations: ['employee', 'approvedBy'],
@@ -129,7 +129,9 @@ export class PermissionsService {
         .leftJoinAndSelect('perm.approvedBy', 'approvedBy')
         .leftJoin('employee.department', 'department')
         .leftJoin('perm.company', 'company')
-        .where('company.id = :companyId', { companyId: currentUser.companyId })
+        .where('company.id = :companyId', {
+          companyId: currentUser.companyId,
+        })
         .andWhere('department.id IN (:...deptIds)', {
           deptIds: managedDeptIds,
         })
@@ -157,7 +159,7 @@ export class PermissionsService {
   }
 
   // APPROVE
-    async approve(
+  async approve(
     currentUser: { userId: number; companyId: number; role: UserRole },
     permissionId: number,
     dto: ApprovePermissionDto,
@@ -181,13 +183,10 @@ export class PermissionsService {
       where: { id: perm.employee.id },
     });
     if (!employee || employee.status !== UserStatus.ACTIVE) {
-        throw new ForbiddenException(
-            'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
-        );
-    }   
-
-
-    
+      throw new ForbiddenException(
+        'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
+      );
+    }
 
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
@@ -219,7 +218,9 @@ export class PermissionsService {
 
     if (!expectedRole) {
       // artıq bütün step-lər işlənib – bu halda approve etməyə çalışmaq səhvdir
-      throw new ForbiddenException('Bu icazə artıq təsdiq zəncirini tamamlayıb.');
+      throw new ForbiddenException(
+        'Bu icazə artıq təsdiq zəncirini tamamlayıb.',
+      );
     }
 
     if (currentUser.role !== expectedRole) {
@@ -255,7 +256,7 @@ export class PermissionsService {
   }
 
   // REJECT
-    async reject(
+  async reject(
     currentUser: { userId: number; companyId: number; role: UserRole },
     permissionId: number,
     dto: RejectPermissionDto,
@@ -279,9 +280,9 @@ export class PermissionsService {
       where: { id: perm.employee.id },
     });
     if (!employee || employee.status !== UserStatus.ACTIVE) {
-        throw new ForbiddenException(
-            'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
-        );
+      throw new ForbiddenException(
+        'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
+      );
     }
 
     if (
@@ -334,8 +335,7 @@ export class PermissionsService {
     return this.permRepo.save(perm);
   }
 
-
-    // Helper: iki tarix arasındakı gün sayı (ən azı 1)
+  // Helper: iki tarix arasındakı gün sayı (ən azı 1)
   private countDays(start: Date, end?: Date): number {
     const s = new Date(start);
     const e = new Date(end ?? start);
@@ -382,12 +382,13 @@ export class PermissionsService {
     }
   }
 
-  // Annual leave limit
+  // Annual leave limit (employee + company policy)
   private async ensureAnnualLeaveLimit(
     company: Company,
     employeeId: number,
     startDate: Date,
-    endDate?: Date,
+    endDate: Date | undefined,
+    limitDays: number,
   ): Promise<void> {
     const year = startDate.getFullYear();
     const from = new Date(year, 0, 1);
@@ -399,8 +400,12 @@ export class PermissionsService {
       .leftJoin('perm.company', 'company')
       .where('company.id = :companyId', { companyId: company.id })
       .andWhere('employee.id = :employeeId', { employeeId })
-      .andWhere('perm.type = :type', { type: PermissionType.ANNUAL_LEAVE })
-      .andWhere('perm.status = :status', { status: PermissionStatus.APPROVED })
+      .andWhere('perm.type = :type', {
+        type: PermissionType.ANNUAL_LEAVE,
+      })
+      .andWhere('perm.status = :status', {
+        status: PermissionStatus.APPROVED,
+      })
       .andWhere('perm.startDate BETWEEN :from AND :to', { from, to })
       .getMany();
 
@@ -412,19 +417,20 @@ export class PermissionsService {
     const requestedDays = this.countDays(startDate, endDate);
     const total = usedDays + requestedDays;
 
-    if (total > company.annualLeaveDaysPerYear) {
+    if (total > limitDays) {
       throw new ForbiddenException(
-        `İllik məzuniyyət limitini aşır: istifadə olunmuş ${usedDays} gün, istəyən ${requestedDays} gün, limit ${company.annualLeaveDaysPerYear} gün.`,
+        `İllik məzuniyyət limitini aşır: istifadə olunmuş ${usedDays} gün, istəyən ${requestedDays} gün, limit ${limitDays} gün.`,
       );
     }
   }
 
-  // Remote limit (sadə variant — hər permission 1 gün kimi sayılır və ya date range qədər)
+  // Remote limit (employee + company policy)
   private async ensureRemoteLimit(
     company: Company,
     employeeId: number,
     startDate: Date,
-    endDate?: Date,
+    endDate: Date | undefined,
+    limitDays: number,
   ): Promise<void> {
     const year = startDate.getFullYear();
     const month = startDate.getMonth(); // 0-based
@@ -438,7 +444,9 @@ export class PermissionsService {
       .leftJoin('perm.company', 'company')
       .where('company.id = :companyId', { companyId: company.id })
       .andWhere('employee.id = :employeeId', { employeeId })
-      .andWhere('perm.type = :type', { type: PermissionType.REMOTE_WORK })
+      .andWhere('perm.type = :type', {
+        type: PermissionType.REMOTE_WORK,
+      })
       .andWhere('perm.status IN (:...statuses)', {
         statuses: [PermissionStatus.PENDING, PermissionStatus.APPROVED],
       })
@@ -456,20 +464,21 @@ export class PermissionsService {
     const requestedDays = this.countDays(startDate, endDate);
     const total = usedDays + requestedDays;
 
-    if (total > company.maxRemoteDaysPerMonth) {
+    if (total > limitDays) {
       throw new ForbiddenException(
-        `Bu ay üçün remote limiti aşılır: istifadə olunmuş ${usedDays} gün, istəyən ${requestedDays} gün, limit ${company.maxRemoteDaysPerMonth} gün.`,
+        `Bu ay üçün remote limiti aşılır: istifadə olunmuş ${usedDays} gün, istəyən ${requestedDays} gün, limit ${limitDays} gün.`,
       );
     }
   }
 
-  // Short leave limit (saatla) – sadə: hər permission üçün (endTime-startTime) hesablanır
+  // Short leave limit (saatla) – employee + company policy
   private async ensureShortLeaveLimit(
     company: Company,
     employeeId: number,
     startDate: Date,
-    startTime?: string,
-    endTime?: string,
+    startTime: string | undefined,
+    endTime: string | undefined,
+    limitHours: number,
   ): Promise<void> {
     if (!startTime || !endTime) {
       return;
@@ -477,9 +486,12 @@ export class PermissionsService {
 
     const [sh, sm] = startTime.split(':').map(Number);
     const [eh, em] = endTime.split(':').map(Number);
-    const requestedHours = (eh + eh / 60) - (sh + sm / 60);
+    const requestedHours = (eh + em / 60) - (sh + sm / 60);
+
     if (requestedHours <= 0) {
-      throw new ForbiddenException('Short leave üçün saat intervalı yanlışdır.');
+      throw new ForbiddenException(
+        'Short leave üçün saat intervalı yanlışdır.',
+      );
     }
 
     const year = startDate.getFullYear();
@@ -493,7 +505,9 @@ export class PermissionsService {
       .leftJoin('perm.company', 'company')
       .where('company.id = :companyId', { companyId: company.id })
       .andWhere('employee.id = :employeeId', { employeeId })
-      .andWhere('perm.type = :type', { type: PermissionType.SHORT_LEAVE })
+      .andWhere('perm.type = :type', {
+        type: PermissionType.SHORT_LEAVE,
+      })
       .andWhere('perm.status IN (:...statuses)', {
         statuses: [PermissionStatus.PENDING, PermissionStatus.APPROVED],
       })
@@ -503,53 +517,72 @@ export class PermissionsService {
       })
       .getMany();
 
-    // Sadə variant: hər short leave üçün 2 saatlıq default qəbul edə bilərsən,
-    // amma daha real üçün hər birinin saat aralığını entity-yə əlavə edib hesablamaq lazımdır.
-    // Burda assume edək ki, gələcəkdə saxlanıb.
-    const usedHours = 0; // TODO: detallaşdırmaq olar
+    // TODO: Burada hər existing short leave üçün saat hesablayıb cəmləmək olar.
+    const usedHours = 0;
 
     const total = usedHours + requestedHours;
-    if (total > company.maxShortLeaveHoursPerMonth) {
+    if (total > limitHours) {
       throw new ForbiddenException(
         `Short leave aylıq saat limiti aşılır: ${total.toFixed(
           1,
-        )} saat, limit ${company.maxShortLeaveHoursPerMonth} saat.`,
+        )} saat, limit ${limitHours} saat.`,
       );
     }
   }
 
   private async validatePolicyForNewPermission(
     company: Company,
-    employeeId: number,
+    employee: User,
     dto: CreatePermissionDto,
   ): Promise<void> {
+    const policy = this.getEffectivePolicy(company, employee);
+
     const startDate = new Date(dto.startDate);
     const endDate = dto.endDate ? new Date(dto.endDate) : undefined;
 
-    if (!company.allowOverlap) {
-      await this.ensureNoOverlap(company.id, employeeId, startDate, endDate);
+    if (!policy.allowOverlap) {
+      await this.ensureNoOverlap(company.id, employee.id, startDate, endDate);
     }
 
     if (dto.type === PermissionType.ANNUAL_LEAVE) {
-      await this.ensureAnnualLeaveLimit(company, employeeId, startDate, endDate);
+      await this.ensureAnnualLeaveLimit(
+        company,
+        employee.id,
+        startDate,
+        endDate,
+        policy.annualLeaveDaysPerYear,
+      );
     }
 
     if (dto.type === PermissionType.REMOTE_WORK) {
-      await this.ensureRemoteLimit(company, employeeId, startDate, endDate);
+      if (!policy.hasRemoteWork) {
+        throw new ForbiddenException(
+          'Bu işçi üçün remote work icazəsinə icazə verilmir',
+        );
+      }
+
+      await this.ensureRemoteLimit(
+        company,
+        employee.id,
+        startDate,
+        endDate,
+        policy.maxRemoteDaysPerMonth,
+      );
     }
 
     if (dto.type === PermissionType.SHORT_LEAVE) {
       await this.ensureShortLeaveLimit(
         company,
-        employeeId,
+        employee.id,
         startDate,
         dto.startTime,
         dto.endTime,
+        policy.maxShortLeaveHoursPerMonth,
       );
     }
   }
 
-    // Sadə approval chain generator
+  // Sadə approval chain generator
   // Real həyatda bunu company / department / permissionType üzrə konfiqurable edə bilərsən.
   private async getApprovalChainForPermission(
     companyId: number,
@@ -600,6 +633,30 @@ export class PermissionsService {
     });
   }
 
+  private getEffectivePolicy(company: Company, employee: User) {
+    const annualLeaveDaysPerYear =
+      employee.customAnnualLeaveDaysPerYear ??
+      company.annualLeaveDaysPerYear;
 
-  
+    const hasRemoteWork =
+      employee.customHasRemoteWork ?? company.hasRemoteWork;
+
+    const maxRemoteDaysPerMonth =
+      employee.customMaxRemoteDaysPerMonth ??
+      company.maxRemoteDaysPerMonth;
+
+    const maxShortLeaveHoursPerMonth =
+      employee.customMaxShortLeaveHoursPerMonth ??
+      company.maxShortLeaveHoursPerMonth;
+
+    const allowOverlap = company.allowOverlap;
+
+    return {
+      annualLeaveDaysPerYear,
+      hasRemoteWork,
+      maxRemoteDaysPerMonth,
+      maxShortLeaveHoursPerMonth,
+      allowOverlap,
+    };
+  }
 }
