@@ -16,6 +16,7 @@ import { PermissionStatus } from '../common/enums/permission-status.enum';
 import { UserRole } from '../common/enums/user-role.enum';
 import { PermissionType } from 'src/common/enums/permission-type.enum';
 import { PermissionApproval } from './permission-approval.entity';
+import { UserStatus } from 'src/common/enums/user-status.enum';
 
 @Injectable()
 export class PermissionsService {
@@ -50,6 +51,10 @@ export class PermissionsService {
     });
     if (!employee || employee.company.id !== currentUser.companyId) {
       throw new ForbiddenException('İstifadəçi bu şirkətə aid deyil');
+    }
+
+    if (employee.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('Deaktiv istifadəçi üçün icazə yaradıla bilməz',);
     }
 
     // ⭐ Policy check
@@ -172,6 +177,18 @@ export class PermissionsService {
       permissionId,
     );
 
+    const employee = await this.usersRepo.findOne({
+      where: { id: perm.employee.id },
+    });
+    if (!employee || employee.status !== UserStatus.ACTIVE) {
+        throw new ForbiddenException(
+            'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
+        );
+    }   
+
+
+    
+
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
         perm.status,
@@ -257,6 +274,15 @@ export class PermissionsService {
       currentUser.companyId,
       permissionId,
     );
+
+    const employee = await this.usersRepo.findOne({
+      where: { id: perm.employee.id },
+    });
+    if (!employee || employee.status !== UserStatus.ACTIVE) {
+        throw new ForbiddenException(
+            'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
+        );
+    }
 
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
