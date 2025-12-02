@@ -38,13 +38,6 @@ export class AuthService {
     return dto;
   }
 
-  private buildAuthResponse(user: User, accessToken: string): AuthResponseDto {
-    const res = new AuthResponseDto();
-    res.user = this.toUserResponse(user);
-    res.accessToken = accessToken;
-    return res;
-  }
-
   private signAccessToken(user: User): Promise<string> {
     const payload = {
       sub: user.id,
@@ -53,6 +46,67 @@ export class AuthService {
       companyId: user.company.id,
     };
     return this.jwtService.signAsync(payload);
+  }
+
+  private signRefreshToken(user: User): Promise<string> {
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      companyId: user.company.id,
+    };
+
+    const expiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+    const secret = process.env.JWT_REFRESH_SECRET || 'refresh_secret';
+
+    return this.jwtService.signAsync(payload, {
+      secret,
+      expiresIn: expiresIn as any,
+    });
+  }
+
+  // JWT_REFRESH_EXPIRES_IN-ə görə DB üçün expiry hesablayırıq (optional)
+  private calcRefreshExpiry(): Date {
+    const raw = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+    const now = Date.now();
+    let ms = 0;
+
+    if (typeof raw === 'string' && raw.endsWith('d')) {
+      const days = parseInt(raw.slice(0, -1), 10) || 7;
+      ms = days * 24 * 60 * 60 * 1000;
+    } else if (typeof raw === 'string' && raw.endsWith('s')) {
+      const seconds = parseInt(raw.slice(0, -1), 10) || 0;
+      ms = seconds * 1000;
+    } else {
+      const seconds = Number(raw) || 0;
+      ms = seconds * 1000;
+    }
+
+    return new Date(now + ms);
+  }
+
+  private async persistRefreshToken(user: User, rawToken: string): Promise<void> {
+    const hash = await bcrypt.hash(rawToken, 10);
+    user.refreshToken = hash;
+    user.refreshTokenExpires = this.calcRefreshExpiry();
+    await this.usersRepo.save(user);
+  }
+
+  private async buildAuthResponseWithTokens(
+    user: User,
+  ): Promise<AuthResponseDto> {
+    const accessToken = await this.signAccessToken(user);
+    const refreshToken = await this.signRefreshToken(user);
+
+    // ⭐ refresh token-i DB-də hash ilə saxla
+    await this.persistRefreshToken(user, refreshToken);
+
+    const res = new AuthResponseDto();
+    res.user = this.toUserResponse(user);
+    res.accessToken = accessToken;
+    res.refreshToken = refreshToken;
+
+    return res;
   }
 
   async registerCompany(dto: RegisterCompanyDto): Promise<AuthResponseDto> {
@@ -88,9 +142,7 @@ export class AuthService {
 
     await this.usersRepo.save(adminUser);
 
-    const token = await this.signAccessToken(adminUser);
-
-    return this.buildAuthResponse(adminUser, token);
+    return this.buildAuthResponseWithTokens(adminUser);
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
@@ -108,14 +160,73 @@ export class AuthService {
       throw new UnauthorizedException('Email və ya şifrə yanlışdır');
     }
 
-    // ⭐ Burada status check əlavə edirik
     if (user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException(
         'İstifadəçi deaktiv edilib, sistemə giriş icazəsi yoxdur',
       );
     }
 
-    const token = await this.signAccessToken(user);
-    return this.buildAuthResponse(user, token);
+    // login zamanı da refresh token rotate olunur
+    return this.buildAuthResponseWithTokens(user);
+  }
+
+  async refreshTokens(refreshToken: string): Promise<AuthResponseDto> {
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token təqdim edilməyib');
+    }
+
+    let payload: any;
+    try {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: process.env.JWT_REFRESH_SECRET || 'refresh_secret',
+      });
+    } catch (error) {
+      throw new UnauthorizedException(
+        'Refresh token yanlışdır və ya vaxtı bitib',
+      );
+    }
+
+    const user = await this.usersRepo.findOne({
+      where: { id: payload.sub },
+      relations: ['company'],
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('İstifadəçi tapılmadı');
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException(
+        'İstifadəçi deaktiv edilib, sistemə giriş icazəsi yoxdur',
+      );
+    }
+
+    // ⭐ DB-də saxlanan hash-lə müqayisə
+    if (!user.refreshToken) {
+      throw new UnauthorizedException('Refresh token artıq etibarlı deyil');
+    }
+
+    const isSame = await bcrypt.compare(refreshToken, user.refreshToken);
+    if (!isSame) {
+      // Burada istəsən "token reuse" detection loglaya bilərsən
+      throw new UnauthorizedException('Refresh token artıq etibarlı deyil');
+    }
+
+    if (user.refreshTokenExpires && user.refreshTokenExpires < new Date()) {
+      throw new UnauthorizedException(
+        'Refresh token müddəti bitib (DB expiry).',
+      );
+    }
+
+    // Burada rotation edirik: yeni access + yeni refresh + DB-də hash yenilənir
+    return this.buildAuthResponseWithTokens(user);
+  }
+
+  async logout(userId: number): Promise<void> {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) return;
+    user.refreshToken = null;
+    user.refreshTokenExpires = null;
+    await this.usersRepo.save(user);
   }
 }

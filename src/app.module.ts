@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { Permission } from './permissions/permission.entity';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PermissionApproval } from './permissions/permission-approval.entity';
+import { Branch } from './branches/branches.entity';
 
 
 @Module({
@@ -25,7 +26,14 @@ import { PermissionApproval } from './permissions/permission-approval.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Company, User, Department, Permission, PermissionApproval],
+      entities: [
+        Company, 
+        User, 
+        Department, 
+        Permission, 
+        PermissionApproval, 
+        Branch
+      ],
       synchronize: true,
     }),
     AuthModule,

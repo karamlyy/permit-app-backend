@@ -10,4 +10,10 @@ export class AuthResponseDto {
     description: 'Access token',
   })
   accessToken: string;
+
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    description: 'Refresh token',
+  })
+  refreshToken: string;
 }
