@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -23,6 +25,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../common/enums/user-role.enum';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
+import { SearchUsersDto } from './dto/search-users.dto';
 
 @ApiTags('admin-users')
 @ApiBearerAuth()
@@ -106,6 +109,28 @@ export class UsersController {
       { companyId: currentUser.companyId, role: currentUser.role },
       id,
       dto,
+    );
+  }
+
+  @Get('admin/search')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @ApiOperation({
+    summary: 'User search (role, status, ad/email üzrə axtarış)',
+  })
+  @ApiOkResponse({
+    description: 'Filtrlənmiş istifadəçi siyahısı qaytarılır',
+  })
+  searchUsers(
+    @CurrentUser() user: any,
+    @Query() query: SearchUsersDto,
+  ) {
+    return this.usersService.searchUsers(
+      {
+        userId: user.userId,
+        companyId: user.companyId,
+        role: user.role,
+      },
+      query,
     );
   }
   

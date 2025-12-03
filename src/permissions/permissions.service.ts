@@ -32,7 +32,7 @@ export class PermissionsService {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(Department)
     private readonly deptRepo: Repository<Department>,
-  ) {}
+  ) { }
 
   // EMPLOYEE: özün üçün icazə yarat
   async createForEmployee(
@@ -180,13 +180,44 @@ export class PermissionsService {
       permissionId,
     );
 
+    // İcazə sahibi (employee) + departament
     const employee = await this.usersRepo.findOne({
       where: { id: perm.employee.id },
+      relations: ['department'],
     });
-    if (!employee || employee.status !== UserStatus.ACTIVE) {
+    if (!employee) {
+      throw new ForbiddenException('İcazə üçün istifadəçi tapılmadı');
+    }
+
+    if (employee.status !== UserStatus.ACTIVE) {
       throw new ForbiddenException(
         'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
       );
+    }
+
+    // ✅ Manager üçün əlavə yoxlama: yalnız öz idarə etdiyi departamentdəki employee
+    if (currentUser.role === UserRole.MANAGER) {
+      const manager = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['managedDepartments'],
+      });
+
+      if (!manager) {
+        throw new ForbiddenException('Manager tapılmadı');
+      }
+
+      const managedDeptIds = (manager.managedDepartments || []).map(
+        (d) => d.id,
+      );
+
+      const employeeDeptId = employee.department?.id;
+
+      if (!employeeDeptId || !managedDeptIds.includes(employeeDeptId)) {
+        // Yəni employee A departamentindədir, manager isə A-nı idarə etmir
+        throw new ForbiddenException(
+          'Bu icazə üçün bu istifadəçini təsdiq etməyə səlahiyyətin yoxdur (başqa departament).',
+        );
+      }
     }
 
     if (
@@ -201,7 +232,6 @@ export class PermissionsService {
 
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
-      relations: ['department', 'department.manager'],
     });
     if (!approver) {
       throw new ForbiddenException('Approver tapılmadı');
@@ -218,10 +248,7 @@ export class PermissionsService {
     const expectedRole = chain[nextStepIndex];
 
     if (!expectedRole) {
-      // artıq bütün step-lər işlənib – bu halda approve etməyə çalışmaq səhvdir
-      throw new ForbiddenException(
-        'Bu icazə artıq təsdiq zəncirini tamamlayıb.',
-      );
+      throw new ForbiddenException('Bu icazə artıq təsdiq zəncirini tamamlayıb.');
     }
 
     if (currentUser.role !== expectedRole) {
@@ -230,7 +257,6 @@ export class PermissionsService {
       );
     }
 
-    // Tarixçəyə addım əlavə et
     const approval = this.approvalRepo.create({
       permission: perm,
       approver,
@@ -277,13 +303,43 @@ export class PermissionsService {
       permissionId,
     );
 
+    // İcazə sahibi (employee) + departament
     const employee = await this.usersRepo.findOne({
       where: { id: perm.employee.id },
+      relations: ['department'],
     });
-    if (!employee || employee.status !== UserStatus.ACTIVE) {
+    if (!employee) {
+      throw new ForbiddenException('İcazə üçün istifadəçi tapılmadı');
+    }
+
+    if (employee.status !== UserStatus.ACTIVE) {
       throw new ForbiddenException(
         'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
       );
+    }
+
+    // ✅ Manager üçün eyni departament yoxlaması
+    if (currentUser.role === UserRole.MANAGER) {
+      const manager = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['managedDepartments'],
+      });
+
+      if (!manager) {
+        throw new ForbiddenException('Manager tapılmadı');
+      }
+
+      const managedDeptIds = (manager.managedDepartments || []).map(
+        (d) => d.id,
+      );
+
+      const employeeDeptId = employee.department?.id;
+
+      if (!employeeDeptId || !managedDeptIds.includes(employeeDeptId)) {
+        throw new ForbiddenException(
+          'Bu icazə üçün bu istifadəçini rədd etməyə səlahiyyətin yoxdur (başqa departament).',
+        );
+      }
     }
 
     if (
@@ -663,7 +719,7 @@ export class PermissionsService {
 
 
 
-    private async calculateLeaveBalance(
+  private async calculateLeaveBalance(
     company: Company,
     employee: User,
     year?: number,
@@ -763,7 +819,7 @@ export class PermissionsService {
   }
 
 
-    async getUserLeaveBalanceForAdmin(
+  async getUserLeaveBalanceForAdmin(
     currentUser: { userId: number; companyId: number; role: UserRole },
     targetUserId: number,
   ): Promise<LeaveBalanceDto> {
