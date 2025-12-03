@@ -9,7 +9,6 @@ import { Department } from '../departments/department.entity';
 import { Permission } from '../permissions/permission.entity';
 import { CompanySize } from '../common/enums/company-size.enum';
 import { CompanySector } from 'src/common/enums/company-sectors.enum';
-import { Branch } from 'src/branches/branches.entity';
 
 @Entity('companies')
 export class Company {
@@ -106,9 +105,6 @@ export class Company {
 
   @OneToMany(() => Permission, (perm) => perm.company)
   permissions: Permission[];
-
-  @OneToMany(() => Branch, (branch) => branch.company)
-  branches: Branch[];
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
