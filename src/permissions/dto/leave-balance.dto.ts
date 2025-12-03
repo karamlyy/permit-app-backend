@@ -27,4 +27,4 @@ export class LeaveBalanceDto {
     description: 'Qalan illik məzuniyyət günləri (entitlement - (used + pending))',
   })
   remainingDays: number;
-}
+} 

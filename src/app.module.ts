@@ -11,7 +11,6 @@ import { UsersModule } from './users/users.module';
 import { Permission } from './permissions/permission.entity';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PermissionApproval } from './permissions/permission-approval.entity';
-import { Branch } from './branches/branches.entity';
 
 
 @Module({
@@ -31,8 +30,7 @@ import { Branch } from './branches/branches.entity';
         User, 
         Department, 
         Permission, 
-        PermissionApproval, 
-        Branch
+        PermissionApproval
       ],
       synchronize: true,
     }),
