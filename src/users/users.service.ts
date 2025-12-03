@@ -14,6 +14,8 @@ import { UserRole } from '../common/enums/user-role.enum';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UserStatus } from 'src/common/enums/user-status.enum';
 import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
+import { SearchUsersDto } from './dto/search-users.dto';
+import { Company } from 'src/companies/company.entity';
 
 @Injectable()
 export class UsersService {
@@ -22,6 +24,8 @@ export class UsersService {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(Department)
     private readonly deptRepo: Repository<Department>,
+    //@InjectRepository(Company)
+    //private readonly companyRepo: Repository<Company>,
   ) {}
 
   private toUserResponse(user: User): UserResponseDto {
@@ -212,5 +216,46 @@ export class UsersService {
 
     const saved = await this.usersRepo.save(user);
     return this.toUserResponse(saved);
+  }
+
+  async searchUsers(
+    currentUser: { userId: number; companyId: number; role: UserRole },
+    dto: SearchUsersDto,
+  ): Promise<User[]> {
+    // Kimlər axtarış edə bilər? HR & Admin üçün açıq saxlayaq
+    if (
+      ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+    ) {
+      throw new ForbiddenException('İstifadəçilər üzrə axtarış üçün səlahiyyət yoxdur');
+    }
+
+    const qb = this.usersRepo
+      .createQueryBuilder('user')
+      .leftJoin('user.company', 'company')
+      .leftJoinAndSelect('user.department', 'department')
+      .where('company.id = :companyId', { companyId: currentUser.companyId });
+
+    // 🔹 Role-a görə filter (əsas hissə)
+    if (dto.role) {
+      qb.andWhere('user.role = :role', { role: dto.role });
+    }
+
+    // 🔹 Status filter (optional)
+    if (dto.status) {
+      qb.andWhere('user.status = :status', { status: dto.status });
+    }
+
+    // 🔹 Text search: name və email
+    if (dto.q) {
+      qb.andWhere(
+        '(LOWER(user.name) LIKE LOWER(:q) OR LOWER(user.email) LIKE LOWER(:q))',
+        { q: `%${dto.q}%` },
+      );
+    }
+
+    // İstəsən orderBy əlavə edə bilərsən
+    qb.orderBy('user.createdAt', 'DESC');
+
+    return qb.getMany();
   }
 }
