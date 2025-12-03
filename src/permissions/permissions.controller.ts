@@ -23,6 +23,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../common/enums/user-role.enum';
+import { LeaveBalanceDto } from './dto/leave-balance.dto';
 
 @ApiTags('permissions')
 @ApiBearerAuth()
@@ -134,6 +135,46 @@ export class PermissionsController {
       },
       id,
       dto,
+    );
+  }
+
+
+  @Get('me/leave-balance')
+  @ApiOperation({
+    summary: 'Hazırkı istifadəçi üçün illik məzuniyyət balansı',
+  })
+  @ApiOkResponse({
+    description: 'İllik məzuniyyət balansı qaytarılır',
+    type: LeaveBalanceDto,
+  })
+  getMyLeaveBalance(@CurrentUser() user: any) {
+    return this.permissionsService.getMyLeaveBalance({
+      userId: user.userId,
+      companyId: user.companyId,
+    });
+  }
+
+  @Get('admin/users/:id/leave-balance')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR, UserRole.MANAGER)
+  @ApiOperation({
+    summary:
+      'Admin/HR/Manager üçün verilmiş istifadəçinin illik məzuniyyət balansını qaytarır',
+  })
+  @ApiOkResponse({
+    description: 'İstifadəçinin illik məzuniyyət balansı qaytarılır',
+    type: LeaveBalanceDto,
+  })
+  getUserLeaveBalance(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.permissionsService.getUserLeaveBalanceForAdmin(
+      {
+        userId: user.userId,
+        companyId: user.companyId,
+        role: user.role,
+      },
+      id,
     );
   }
 }
