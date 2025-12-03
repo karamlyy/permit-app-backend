@@ -24,6 +24,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../common/enums/user-role.enum';
 import { LeaveBalanceDto } from './dto/leave-balance.dto';
+import { PermissionAuditDto } from './dto/permission-audit.dto';
 
 @ApiTags('permissions')
 @ApiBearerAuth()
@@ -177,4 +178,31 @@ export class PermissionsController {
       id,
     );
   }
+
+  @Get('admin/:id/audit-log')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @ApiOperation({
+    summary:
+      'Verilmiş permission üçün bütün audit log tarixçəsini qaytarır (approve/reject cəhdləri, success/fail)',
+  })
+  @ApiOkResponse({
+    description: 'Audit log siyahısı qaytarılır',
+    type: PermissionAuditDto,
+    isArray: true,
+  })
+  getPermissionAuditLog(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<PermissionAuditDto[]> {
+    return this.permissionsService.getPermissionAuditLog(
+      {
+        userId: user.userId,
+        companyId: user.companyId,
+        role: user.role,
+      },
+      id,
+    );
+  }
+
+  
 }

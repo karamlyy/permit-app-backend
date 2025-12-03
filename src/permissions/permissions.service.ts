@@ -18,6 +18,10 @@ import { PermissionType } from 'src/common/enums/permission-type.enum';
 import { PermissionApproval } from './permission-approval.entity';
 import { UserStatus } from 'src/common/enums/user-status.enum';
 import { LeaveBalanceDto } from './dto/leave-balance.dto';
+import { PermissionAudit } from './permission-audit.entity';
+import { PermissionAuditAction } from '../common/enums/permission-audit-action.enum';
+import { PermissionAuditResult } from '../common/enums/permission-audit-result.enum';
+import { PermissionAuditActorDto, PermissionAuditDto } from './dto/permission-audit.dto';
 
 @Injectable()
 export class PermissionsService {
@@ -32,6 +36,8 @@ export class PermissionsService {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(Department)
     private readonly deptRepo: Repository<Department>,
+    @InjectRepository(PermissionAudit)
+    private readonly auditRepo: Repository<PermissionAudit>,
   ) { }
 
   // EMPLOYEE: özün üçün icazə yarat
@@ -165,6 +171,7 @@ export class PermissionsService {
     permissionId: number,
     dto: ApprovePermissionDto,
   ): Promise<Permission> {
+    // 1) Rola görə ilkin check
     if (
       ![
         UserRole.COMPANY_ADMIN,
@@ -172,6 +179,15 @@ export class PermissionsService {
         UserRole.MANAGER,
       ].includes(currentUser.role)
     ) {
+      // audit: icazəsi olmayan biri approve etməyə çalışdı
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        actorId: currentUser.userId,
+        reason: 'Bu rolda approve əməliyyatı üçün səlahiyyət yoxdur',
+      });
+
       throw new ForbiddenException('İcazə təsdiqi üçün səlahiyyət yoxdur');
     }
 
@@ -180,22 +196,43 @@ export class PermissionsService {
       permissionId,
     );
 
-    // İcazə sahibi (employee) + departament
+    // 2) Employee + departament + status
     const employee = await this.usersRepo.findOne({
       where: { id: perm.employee.id },
       relations: ['department'],
     });
+
     if (!employee) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'İcazə üçün istifadəçi tapılmadı',
+      });
+
       throw new ForbiddenException('İcazə üçün istifadəçi tapılmadı');
     }
 
     if (employee.status !== UserStatus.ACTIVE) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat cəhdi',
+      });
+
       throw new ForbiddenException(
         'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
       );
     }
 
-    // ✅ Manager üçün əlavə yoxlama: yalnız öz idarə etdiyi departamentdəki employee
+    // 3) Manager üçün: yalnız öz idarə etdiyi departamentdəki employee
     if (currentUser.role === UserRole.MANAGER) {
       const manager = await this.usersRepo.findOne({
         where: { id: currentUser.userId },
@@ -203,40 +240,83 @@ export class PermissionsService {
       });
 
       if (!manager) {
+        await this.logPermissionAction({
+          companyId: currentUser.companyId,
+          permission: perm,
+          actorId: currentUser.userId,
+          action: PermissionAuditAction.APPROVE,
+          result: PermissionAuditResult.FAILURE,
+          previousStatus: perm.status,
+          reason: 'Manager tapılmadı',
+        });
+
         throw new ForbiddenException('Manager tapılmadı');
       }
 
       const managedDeptIds = (manager.managedDepartments || []).map(
         (d) => d.id,
       );
-
       const employeeDeptId = employee.department?.id;
 
       if (!employeeDeptId || !managedDeptIds.includes(employeeDeptId)) {
-        // Yəni employee A departamentindədir, manager isə A-nı idarə etmir
+        await this.logPermissionAction({
+          companyId: currentUser.companyId,
+          permission: perm,
+          actorId: currentUser.userId,
+          action: PermissionAuditAction.APPROVE,
+          result: PermissionAuditResult.FAILURE,
+          previousStatus: perm.status,
+          reason:
+            'Manager başqa departamentə aid employee üçün approve etməyə çalışdı',
+        });
+
         throw new ForbiddenException(
           'Bu icazə üçün bu istifadəçini təsdiq etməyə səlahiyyətin yoxdur (başqa departament).',
         );
       }
     }
 
+    // 4) Artıq yekun vəziyyətdədirsə (APPROVED/REJECTED) – block
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
         perm.status,
       )
     ) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason:
+          'Artıq APPROVED/REJECTED vəziyyətində olan icazəni yenidən approve etmə cəhdi',
+      });
+
       throw new ForbiddenException(
         'Bu icazə artıq yekun vəziyyətdədir (APPROVED/REJECTED).',
       );
     }
 
+    // 5) Approver user
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
     });
     if (!approver) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'Approver tapılmadı',
+      });
+
       throw new ForbiddenException('Approver tapılmadı');
     }
 
+    // 6) Approval chain + step check
     const chain = await this.getApprovalChainForPermission(
       currentUser.companyId,
       perm.employee,
@@ -248,15 +328,38 @@ export class PermissionsService {
     const expectedRole = chain[nextStepIndex];
 
     if (!expectedRole) {
-      throw new ForbiddenException('Bu icazə artıq təsdiq zəncirini tamamlayıb.');
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'Artıq bütün approval zənciri tamamlanmış icazə üçün approve cəhdi',
+      });
+
+      throw new ForbiddenException(
+        'Bu icazə artıq təsdiq zəncirini tamamlayıb.',
+      );
     }
 
     if (currentUser.role !== expectedRole) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: `Approval chain-də gözlənilən rol: ${expectedRole}, amma actor rolu: ${currentUser.role}`,
+      });
+
       throw new ForbiddenException(
         `Bu addım üçün gözlənilən rol: ${expectedRole}, səndə isə: ${currentUser.role}.`,
       );
     }
 
+    // 7) Approval addımı DB-yə yaz
     const approval = this.approvalRepo.create({
       permission: perm,
       approver,
@@ -268,6 +371,7 @@ export class PermissionsService {
     await this.approvalRepo.save(approval);
 
     const isLastStep = nextStepIndex === chain.length - 1;
+    const prevStatus = perm.status;
 
     if (isLastStep) {
       perm.status = PermissionStatus.APPROVED;
@@ -279,7 +383,21 @@ export class PermissionsService {
       perm.managerComment = dto.managerComment ?? perm.managerComment;
     }
 
-    return this.permRepo.save(perm);
+    const saved = await this.permRepo.save(perm);
+
+    // 8) SUCCESS audit log
+    await this.logPermissionAction({
+      companyId: currentUser.companyId,
+      permission: saved,
+      actorId: currentUser.userId,
+      action: PermissionAuditAction.APPROVE,
+      result: PermissionAuditResult.SUCCESS,
+      previousStatus: prevStatus,
+      newStatus: saved.status,
+      reason: dto.managerComment,
+    });
+
+    return saved;
   }
 
   // REJECT
@@ -288,6 +406,7 @@ export class PermissionsService {
     permissionId: number,
     dto: RejectPermissionDto,
   ): Promise<Permission> {
+    // 1) Rola görə ilkin check
     if (
       ![
         UserRole.COMPANY_ADMIN,
@@ -295,6 +414,14 @@ export class PermissionsService {
         UserRole.MANAGER,
       ].includes(currentUser.role)
     ) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        actorId: currentUser.userId,
+        reason: 'Bu rolda reject əməliyyatı üçün səlahiyyət yoxdur',
+      });
+
       throw new ForbiddenException('İcazə rəddi üçün səlahiyyət yoxdur');
     }
 
@@ -303,22 +430,43 @@ export class PermissionsService {
       permissionId,
     );
 
-    // İcazə sahibi (employee) + departament
+    // 2) Employee + departament + status
     const employee = await this.usersRepo.findOne({
       where: { id: perm.employee.id },
       relations: ['department'],
     });
     if (!employee) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'İcazə üçün istifadəçi tapılmadı',
+      });
+
       throw new ForbiddenException('İcazə üçün istifadəçi tapılmadı');
     }
 
     if (employee.status !== UserStatus.ACTIVE) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason:
+          'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat cəhdi',
+      });
+
       throw new ForbiddenException(
         'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
       );
     }
 
-    // ✅ Manager üçün eyni departament yoxlaması
+    // 3) Manager üçün: yalnız öz departamentindəki employee
     if (currentUser.role === UserRole.MANAGER) {
       const manager = await this.usersRepo.findOne({
         where: { id: currentUser.userId },
@@ -326,6 +474,16 @@ export class PermissionsService {
       });
 
       if (!manager) {
+        await this.logPermissionAction({
+          companyId: currentUser.companyId,
+          permission: perm,
+          actorId: currentUser.userId,
+          action: PermissionAuditAction.REJECT,
+          result: PermissionAuditResult.FAILURE,
+          previousStatus: perm.status,
+          reason: 'Manager tapılmadı',
+        });
+
         throw new ForbiddenException('Manager tapılmadı');
       }
 
@@ -336,29 +494,64 @@ export class PermissionsService {
       const employeeDeptId = employee.department?.id;
 
       if (!employeeDeptId || !managedDeptIds.includes(employeeDeptId)) {
+        await this.logPermissionAction({
+          companyId: currentUser.companyId,
+          permission: perm,
+          actorId: currentUser.userId,
+          action: PermissionAuditAction.REJECT,
+          result: PermissionAuditResult.FAILURE,
+          previousStatus: perm.status,
+          reason:
+            'Manager başqa departamentə aid employee üçün reject etməyə çalışdı',
+        });
+
         throw new ForbiddenException(
           'Bu icazə üçün bu istifadəçini rədd etməyə səlahiyyətin yoxdur (başqa departament).',
         );
       }
     }
 
+    // 4) Artıq yekun vəziyyətdədirsə – block
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
         perm.status,
       )
     ) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason:
+          'Artıq APPROVED/REJECTED vəziyyətində olan icazəni yenidən reject etmə cəhdi',
+      });
+
       throw new ForbiddenException(
         'Bu icazə artıq yekun vəziyyətdədir (APPROVED/REJECTED).',
       );
     }
 
+    // 5) Approver user
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
     });
     if (!approver) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'Approver tapılmadı',
+      });
+
       throw new ForbiddenException('Approver tapılmadı');
     }
 
+    // 6) Approval chain + step check
     const chain = await this.getApprovalChainForPermission(
       currentUser.companyId,
       perm.employee,
@@ -369,11 +562,22 @@ export class PermissionsService {
     const expectedRole = chain[nextStepIndex];
 
     if (!expectedRole || currentUser.role !== expectedRole) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: `Approval chain-də gözlənilən rol: ${expectedRole}, actor rolu: ${currentUser.role}`,
+      });
+
       throw new ForbiddenException(
         `Bu addım üçün gözlənilən rol: ${expectedRole}, səndə isə: ${currentUser.role}.`,
       );
     }
 
+    // 7) Approval addımı (REJECT) yaz
     const approval = this.approvalRepo.create({
       permission: perm,
       approver,
@@ -384,12 +588,28 @@ export class PermissionsService {
     });
     await this.approvalRepo.save(approval);
 
+    const prevStatus = perm.status;
+
     perm.status = PermissionStatus.REJECTED;
     perm.approvedBy = approver;
     perm.managerComment = dto.managerComment;
     perm.decidedAt = new Date();
 
-    return this.permRepo.save(perm);
+    const saved = await this.permRepo.save(perm);
+
+    // 8) SUCCESS audit log
+    await this.logPermissionAction({
+      companyId: currentUser.companyId,
+      permission: saved,
+      actorId: currentUser.userId,
+      action: PermissionAuditAction.REJECT,
+      result: PermissionAuditResult.SUCCESS,
+      previousStatus: prevStatus,
+      newStatus: saved.status,
+      reason: dto.managerComment,
+    });
+
+    return saved;
   }
 
   // Helper: iki tarix arasındakı gün sayı (ən azı 1)
@@ -885,4 +1105,90 @@ export class PermissionsService {
       'Bu əməliyyat üçün səlahiyyətiniz yoxdur',
     );
   }
+
+
+  private async logPermissionAction(options: {
+    companyId: number;
+    permission?: Permission;
+    actorId?: number;
+    action: PermissionAuditAction;
+    result: PermissionAuditResult;
+    previousStatus?: PermissionStatus;
+    newStatus?: PermissionStatus;
+    reason?: string;
+  }): Promise<void> {
+    const company = await this.companyRepo.findOne({
+      where: { id: options.companyId },
+    });
+    if (!company) return;
+
+    const actor = options.actorId
+      ? (await this.usersRepo.findOne({ where: { id: options.actorId } })) ??
+      undefined
+      : undefined;
+
+    const audit = this.auditRepo.create({
+      company,
+      permission: options.permission,
+      actor,
+      action: options.action,
+      result: options.result,
+      previousStatus: options.previousStatus,
+      newStatus: options.newStatus,
+      reason: options.reason,
+    } as any);
+
+    await this.auditRepo.save(audit);
+  }
+
+  async getPermissionAuditLog(
+  currentUser: { userId: number; companyId: number; role: UserRole },
+  permissionId: number,
+): Promise<PermissionAuditDto[]> {
+  if (
+    ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+  ) {
+    throw new ForbiddenException(
+      'Audit logları görmək üçün səlahiyyət yoxdur',
+    );
+  }
+
+  const perm = await this.findOneInCompanyOrThrow(
+    currentUser.companyId,
+    permissionId,
+  );
+
+  const audits = await this.auditRepo.find({
+    where: {
+      company: { id: currentUser.companyId },
+      permission: { id: perm.id },
+    },
+    relations: ['actor'],
+    order: { createdAt: 'ASC' },
+  });
+
+  return audits.map((a) => {
+    const dto = new PermissionAuditDto();
+    dto.id = a.id;
+    dto.action = a.action;
+    dto.result = a.result;
+    dto.previousStatus = a.previousStatus;
+    dto.newStatus = a.newStatus;
+    dto.reason = a.reason;
+    dto.createdAt = a.createdAt;
+
+    if (a.actor) {
+      const actorDto = new PermissionAuditActorDto();
+      actorDto.id = a.actor.id;
+      actorDto.name = a.actor.name;
+      actorDto.email = a.actor.email;
+      actorDto.role = a.actor.role;
+      dto.actor = actorDto;
+    } else {
+      dto.actor = null;
+    }
+
+    return dto;
+  });
+}
 }

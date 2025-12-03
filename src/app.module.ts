@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { Permission } from './permissions/permission.entity';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PermissionApproval } from './permissions/permission-approval.entity';
+import { PermissionAudit } from './permissions/permission-audit.entity';
 
 
 @Module({
@@ -26,11 +27,12 @@ import { PermissionApproval } from './permissions/permission-approval.entity';
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
       entities: [
-        Company, 
-        User, 
-        Department, 
-        Permission, 
-        PermissionApproval
+        Company,
+        User,
+        Department,
+        Permission,
+        PermissionApproval,
+        PermissionAudit,
       ],
       synchronize: true,
     }),

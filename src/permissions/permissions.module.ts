@@ -7,6 +7,7 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { PermissionsService } from './permissions.service';
 import { PermissionsController } from './permissions.controller';
+import { PermissionAudit } from './permission-audit.entity';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { PermissionsController } from './permissions.controller';
       Company,
       User,
       Department,
+      PermissionAudit,
     ]),
   ],
   providers: [PermissionsService],
