@@ -56,7 +56,7 @@ export class Permission {
   reason?: string;
 
   @Column({ type: 'text', nullable: true })
-  managerComment?: string;
+  comment?: string;
 
   @Column({ type: 'timestamp', nullable: true })
   decidedAt?: Date;

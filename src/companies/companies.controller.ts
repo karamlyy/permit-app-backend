@@ -25,7 +25,7 @@ import { UpdateCompanyProfileDto } from './dto/update-company-profile.dto';
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller()
 export class CompaniesController {
-  constructor(private readonly companiesService: CompaniesService) {}
+  constructor(private readonly companiesService: CompaniesService) { }
 
   // 👤 İstifadəçinin öz şirkət məlumatı (departments, users ilə)
   @Get('me/company')
@@ -56,9 +56,10 @@ export class CompaniesController {
 
   // 🏢 Şirkət profilini yeniləmək (ad, haqqında, sektor, ölçü və s.)
   @Patch('admin/company/profile')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @Roles(UserRole.COMPANY_ADMIN)
   @ApiOperation({
     summary: 'Şirkət profilini yenilə (ad, haqqında, sektor, ölçü və s.)',
+    description: 'Bu əməliyyatı yalnız Company Admin icra edə bilər.',
   })
   @ApiOkResponse({ description: 'Profil yeniləndi' })
   updateProfile(

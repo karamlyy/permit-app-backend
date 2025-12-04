@@ -20,15 +20,32 @@ export class Department {
     onDelete: 'CASCADE',
   })
   company: Company;
+  
 
+  // Departamentin MANAGER-i (komanda lead və s.)
   @ManyToOne(() => User, (user) => user.managedDepartments, {
     nullable: true,
+    onDelete: 'SET NULL',
   })
-  manager?: User;
+  manager?: User | null;
+
+  // 🔥 Yeni: departamentin rəhbəri (HEAD_OF_DEPARTMENT)
+  @ManyToOne(() => User, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  headOfDepartment?: User | null;
 
   @OneToMany(() => User, (user) => user.department)
   users: User[];
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
+  
+
+  
+
+  
+
+  
 }

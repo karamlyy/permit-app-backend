@@ -25,6 +25,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../common/enums/user-role.enum';
 import { LeaveBalanceDto } from './dto/leave-balance.dto';
 import { PermissionAuditDto } from './dto/permission-audit.dto';
+import { PermissionDetailsDto } from './dto/permission-details.dto';
 
 @ApiTags('permissions')
 @ApiBearerAuth()
@@ -60,6 +61,8 @@ export class PermissionsController {
     UserRole.MANAGER,
     UserRole.HR,
     UserRole.COMPANY_ADMIN,
+    UserRole.HEAD_OF_DEPARTMENT,
+    UserRole.HEAD_OF_HR,
   )
   @ApiOperation({ summary: 'Hazırkı istifadəçinin bütün icazələrini qaytarır' })
   @ApiOkResponse({ description: 'İcazələr siyahısı qaytarıldı' })
@@ -75,6 +78,8 @@ export class PermissionsController {
     UserRole.COMPANY_ADMIN,
     UserRole.HR,
     UserRole.MANAGER,
+    UserRole.HEAD_OF_DEPARTMENT,
+    UserRole.HEAD_OF_HR,
   )
   @ApiOperation({
     summary:
@@ -93,7 +98,9 @@ export class PermissionsController {
   @Post(':id/approve')
   @Roles(
     UserRole.COMPANY_ADMIN,
+    UserRole.HEAD_OF_HR,
     UserRole.HR,
+    UserRole.HEAD_OF_DEPARTMENT,
     UserRole.MANAGER,
   )
   @ApiOperation({ summary: 'İcazəni təsdiqləyir' })
@@ -118,7 +125,9 @@ export class PermissionsController {
   @Post(':id/reject')
   @Roles(
     UserRole.COMPANY_ADMIN,
+    UserRole.HEAD_OF_HR,
     UserRole.HR,
+    UserRole.HEAD_OF_DEPARTMENT,
     UserRole.MANAGER,
   )
   @ApiOperation({ summary: 'İcazəni rədd edir' })
@@ -156,10 +165,10 @@ export class PermissionsController {
   }
 
   @Get('admin/users/:id/leave-balance')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR, UserRole.MANAGER)
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.HEAD_OF_DEPARTMENT, UserRole.HEAD_OF_HR)
   @ApiOperation({
     summary:
-      'Admin/HR/Manager üçün verilmiş istifadəçinin illik məzuniyyət balansını qaytarır',
+      'COMPANY_ADMIN/HEAD_OF_HR/HR/HEAD_OF_DEPARTMENT/MANAGER üçün verilmiş istifadəçinin illik məzuniyyət balansını qaytarır (USER_ID ilə)',
   })
   @ApiOkResponse({
     description: 'İstifadəçinin illik məzuniyyət balansı qaytarılır',
@@ -203,6 +212,37 @@ export class PermissionsController {
       id,
     );
   }
+
+
+  @Get(':id/details')
+@Roles(
+  UserRole.EMPLOYEE,
+  UserRole.MANAGER,
+  UserRole.HEAD_OF_DEPARTMENT,
+  UserRole.HR,
+  UserRole.HEAD_OF_HR,
+  UserRole.COMPANY_ADMIN,
+)
+@ApiOperation({
+  summary: 'İcazənin tam detallarını qaytarır (chain, history, hazırda kimdədir)',
+})
+@ApiOkResponse({
+  description: 'İcazə detalları qaytarılır',
+  type: PermissionDetailsDto,
+})
+getPermissionDetails(
+  @CurrentUser() user: any,
+  @Param('id', ParseIntPipe) id: number,
+): Promise<PermissionDetailsDto> {
+  return this.permissionsService.getPermissionDetails(
+    {
+      userId: user.userId,
+      companyId: user.companyId,
+      role: user.role,
+    },
+    id,
+  );
+}
 
   
 }

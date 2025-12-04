@@ -5,5 +5,5 @@ export class ApprovePermissionDto {
   @ApiPropertyOptional({ example: 'OK, qəbul olundu.' })
   @IsOptional()
   @IsString()
-  managerComment?: string;
+  comment?: string;
 }

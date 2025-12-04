@@ -77,4 +77,7 @@ export class User {
 
   @OneToMany(() => Permission, (perm) => perm.employee)
   permissions: Permission[];
+
+  @OneToMany(() => Department, (dept) => dept.headOfDepartment)
+  headedDepartments: Department[];
 }

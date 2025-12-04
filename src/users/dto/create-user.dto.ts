@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -28,7 +29,15 @@ export class CreateUserDto {
   @ApiProperty({
     enum: UserRole,
     example: UserRole.EMPLOYEE,
-    description: 'Yeni istifadəçinin rolu (COMPANY_ADMIN olmamalıdır)',
+    description: `
+İstifadəçi rolu:
+- EMPLOYEE
+- MANAGER
+- HEAD_OF_DEPARTMENT → departmentId mütləq olmalıdır
+- HR
+- HEAD_OF_HR → HR departamentinə bağlı olmalıdır (departmentId mütləq)
+COMPANY_ADMIN buradan yaradıla bilməz.
+`,
   })
   @IsEnum(UserRole)
   role: UserRole;
@@ -45,7 +54,14 @@ export class CreateUserDto {
 
   @ApiPropertyOptional({
     example: 3,
-    description: 'User-in aid olduğu department ID-si',
+    description: `
+User-in department ID-si:
+- EMPLOYEE: optional
+- MANAGER: optional
+- HR: optional (amma şirkətdə HR departamenti varsa, bura yazılır)
+- HEAD_OF_DEPARTMENT: MÜTLƏQ
+- HEAD_OF_HR: MÜTLƏQ (və departament HR departamenti olmalıdır)
+`,
   })
   @IsOptional()
   @IsInt()

@@ -1,137 +1,206 @@
+// src/users/users.controller.ts
 import {
   Body,
   Controller,
   Get,
-  Param,
-  ParseIntPipe,
   Patch,
   Post,
   Query,
+  Param,
+  ParseIntPipe,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { UserRole } from '../common/enums/user-role.enum';
-import { UserResponseDto } from './dto/user-response.dto';
 import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
 import { SearchUsersDto } from './dto/search-users.dto';
+import { UserResponseDto } from './dto/user-response.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
+import { UserRole } from '../common/enums/user-role.enum';
 
-@ApiTags('admin-users')
+@ApiTags('users')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'), RolesGuard)
-@Controller('admin/users')
+@UseGuards(AuthGuard('jwt'))
+@Controller()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
-  @Post()
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  // ─────────────────────────────────────────────
+  //  POST /admin/users → şirkət daxilində yeni user yarat
+  // ─────────────────────────────────────────────
+  @Post('admin/users')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR)
   @ApiOperation({
-    summary:
-      'HR və ya Company Admin şirkət daxilində yeni istifadəçi (HR/MANAGER/EMPLOYEE) yaradır',
+    summary: 'Şirkət daxilində yeni istifadəçi yarat',
+    description: `
+COMPANY_ADMIN və HEAD_OF_HR bu endpoint vasitəsilə aşağıdakı rolları yarada bilər:
+
+- EMPLOYEE
+- MANAGER
+- HEAD_OF_DEPARTMENT
+- HR
+- HEAD_OF_HR
+
+Qeyd: COMPANY_ADMIN bu endpoint ilə COMPANY_ADMIN yarada bilməz.
+  `,
   })
   @ApiCreatedResponse({
-    description: 'İstifadəçi yaradıldı',
+    description: 'İstifadəçi uğurla yaradıldı',
     type: UserResponseDto,
   })
-  create(
+  @ApiBadRequestResponse({
+    description:
+      'Validation xətası, email artıq istifadə olunur və ya role/departament uyğun deyil',
+  })
+  @ApiForbiddenResponse({
+    description: 'Səlahiyyət yoxdur',
+  })
+  createUser(
     @CurrentUser() currentUser: any,
     @Body() dto: CreateUserDto,
-  ) {
-    return this.usersService.createUserForCompany(currentUser, dto);
+  ): Promise<UserResponseDto> {
+    return this.usersService.createUserForCompany(
+      { companyId: currentUser.companyId, role: currentUser.role },
+      dto,
+    );
   }
 
-  @Patch(':id/deactivate')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  // ─────────────────────────────────────────────
+  //  PATCH /admin/users/:id/deactivate → user-i soft deactivate
+  // ─────────────────────────────────────────────
+  @Patch('admin/users/:id/deactivate')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR)
   @ApiOperation({
-    summary: 'İstifadəçini soft delete (status = INACTIVE) edir',
+    summary: 'İstifadəçini deaktiv et (soft delete)',
+    description:
+      'Status INACTIVE olur və bu istifadəçi artıq login ola bilmir.',
   })
   @ApiOkResponse({
     description: 'İstifadəçi deaktiv edildi',
     type: UserResponseDto,
   })
-  deactivate(
+  @ApiForbiddenResponse({
+    description:
+      'COMPANY_ADMIN və ya HEAD_OF_HR olmayan istifadəçi bu əməliyyatı edə bilməz',
+  })
+  deactivateUser(
     @CurrentUser() currentUser: any,
-    @Param('id', ParseIntPipe) id: number,
-  ) {
+    @Param('id', ParseIntPipe) userId: number,
+  ): Promise<UserResponseDto> {
     return this.usersService.deactivateUser(
       { companyId: currentUser.companyId, role: currentUser.role },
-      id,
+      userId,
     );
   }
 
-  @Patch(':id/activate')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  // ─────────────────────────────────────────────
+  //  PATCH /admin/users/:id/activate → user-i yenidən aktiv et
+  // ─────────────────────────────────────────────
+  @Patch('admin/users/:id/activate')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR)
   @ApiOperation({
-    summary: 'İstifadəçini yenidən aktiv (status = ACTIVE) edir',
+    summary: 'Deaktiv istifadəçini yenidən aktiv et',
   })
   @ApiOkResponse({
     description: 'İstifadəçi aktiv edildi',
     type: UserResponseDto,
   })
-  activate(
+  @ApiForbiddenResponse({
+    description:
+      'COMPANY_ADMIN və ya HEAD_OF_HR olmayan istifadəçi bu əməliyyatı edə bilməz',
+  })
+  activateUser(
     @CurrentUser() currentUser: any,
-    @Param('id', ParseIntPipe) id: number,
-  ) {
+    @Param('id', ParseIntPipe) userId: number,
+  ): Promise<UserResponseDto> {
     return this.usersService.activateUser(
       { companyId: currentUser.companyId, role: currentUser.role },
-      id,
+      userId,
     );
   }
 
-
-  @Patch(':id/policy')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  // ─────────────────────────────────────────────
+  //  PATCH /admin/users/:id/policy → user üçün fərdi leave/remote policy
+  // ─────────────────────────────────────────────
+  @Patch('admin/users/:id/policy')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR, UserRole.HEAD_OF_HR)
   @ApiOperation({
-    summary:
-      'İşçi üçün fərdi icazə policy-lərini (illik məzuniyyət, remote limiti və s.) override et',
+    summary: 'Konkret istifadəçi üçün fərdi icazə policy-lərini yenilə',
+    description: `
+Bu endpoint ilə user səviyyəsində aşağıdakı limitlər override olunur:
+- illik məzuniyyət günlərinin sayı (annual leave)
+- aylıq remote gün limiti
+- aylıq short leave saat limiti
+
+Səlahiyyətli rollar:
+- COMPANY_ADMIN
+- HEAD_OF_HR
+- HR
+
+Qeyd: Company Admin istifadəçisinin policy-sini yalnız Company Admin dəyişə bilər (service səviyyəsində yoxlanılır).
+`,
   })
   @ApiOkResponse({
-    description: 'İstifadəçinin policy-si yeniləndi',
+    description: 'İstifadəçi policy-si yeniləndi',
     type: UserResponseDto,
   })
-  updatePolicy(
+  @ApiForbiddenResponse({
+    description:
+      'COMPANY_ADMIN, HEAD_OF_HR və ya HR olmayan istifadəçi bu əməliyyatı edə bilməz',
+  })
+  updateUserPolicy(
     @CurrentUser() currentUser: any,
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseIntPipe) userId: number,
     @Body() dto: UpdateUserPolicyDto,
-  ) {
+  ): Promise<UserResponseDto> {
     return this.usersService.updateUserPolicy(
       { companyId: currentUser.companyId, role: currentUser.role },
-      id,
+      userId,
       dto,
     );
   }
 
-  @Get('admin/search')
+  // ─────────────────────────────────────────────
+  //  GET /admin/users/search → HR/Admin üçün axtarış
+  // ─────────────────────────────────────────────
+  @Get('admin/users/search')
   @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
   @ApiOperation({
-    summary: 'User search (role, status, ad/email üzrə axtarış)',
+    summary: 'Şirkət daxilində istifadəçilər üzrə axtarış',
+    description: `
+Filter-lər:
+- role (EMPLOYEE, MANAGER, HR, və s.)
+- status (ACTIVE / INACTIVE)
+- q → ad və ya email üzrə text search`,
   })
   @ApiOkResponse({
-    description: 'Filtrlənmiş istifadəçi siyahısı qaytarılır',
+    description: 'Axtarış nəticəsi',
+  })
+  @ApiForbiddenResponse({
+    description: 'HR / Company Admin olmayan istifadəçi axtarış edə bilməz',
   })
   searchUsers(
-    @CurrentUser() user: any,
-    @Query() query: SearchUsersDto,
+    @CurrentUser() currentUser: any,
+    @Query() dto: SearchUsersDto,
   ) {
     return this.usersService.searchUsers(
       {
-        userId: user.userId,
-        companyId: user.companyId,
-        role: user.role,
+        userId: currentUser.userId,
+        companyId: currentUser.companyId,
+        role: currentUser.role,
       },
-      query,
+      dto,
     );
   }
-  
 }

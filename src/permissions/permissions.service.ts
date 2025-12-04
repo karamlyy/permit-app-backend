@@ -22,6 +22,7 @@ import { PermissionAudit } from './permission-audit.entity';
 import { PermissionAuditAction } from '../common/enums/permission-audit-action.enum';
 import { PermissionAuditResult } from '../common/enums/permission-audit-result.enum';
 import { PermissionAuditActorDto, PermissionAuditDto } from './dto/permission-audit.dto';
+import { PermissionApprovalStepDto, PermissionChainStepDto, PermissionDetailsDto, PermissionEmployeeDto } from './dto/permission-details.dto';
 
 @Injectable()
 export class PermissionsService {
@@ -99,11 +100,12 @@ export class PermissionsService {
   async findCompanyPermissionsForApprover(
     currentUser: { userId: number; companyId: number; role: UserRole },
   ): Promise<Permission[]> {
+    // 1) Bütün şirkəti görə bilən rollar: COMPANY_ADMIN, HR, HEAD_OF_HR
     if (
       currentUser.role === UserRole.COMPANY_ADMIN ||
-      currentUser.role === UserRole.HR
+      currentUser.role === UserRole.HR ||
+      currentUser.role === UserRole.HEAD_OF_HR
     ) {
-      // HR & Admin bütün şirkəti görsün
       return this.permRepo.find({
         where: { company: { id: currentUser.companyId } },
         relations: ['employee', 'approvedBy'],
@@ -111,8 +113,42 @@ export class PermissionsService {
       });
     }
 
+    // 2) HEAD_OF_DEPARTMENT → yalnız öz departamentindəki işçilər
+    if (currentUser.role === UserRole.HEAD_OF_DEPARTMENT) {
+      const head = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['headedDepartments'],
+      });
+
+      if (!head) {
+        throw new ForbiddenException('Head of Department tapılmadı');
+      }
+
+      const headedDeptIds = (head.headedDepartments || []).map((d) => d.id);
+
+      if (headedDeptIds.length === 0) {
+        // hec bir departamentə head təyin olunmayıbsa, görəcəyi icazə yoxdur
+        return [];
+      }
+
+      return this.permRepo
+        .createQueryBuilder('perm')
+        .leftJoinAndSelect('perm.employee', 'employee')
+        .leftJoinAndSelect('perm.approvedBy', 'approvedBy')
+        .leftJoin('employee.department', 'department')
+        .leftJoin('perm.company', 'company')
+        .where('company.id = :companyId', {
+          companyId: currentUser.companyId,
+        })
+        .andWhere('department.id IN (:...deptIds)', {
+          deptIds: headedDeptIds,
+        })
+        .orderBy('perm.createdAt', 'DESC')
+        .getMany();
+    }
+
+    // 3) MANAGER → yalnız öz idarə etdiyi departamentlər
     if (currentUser.role === UserRole.MANAGER) {
-      // Manager yalnız öz departamentindəki işçiləri görsün
       const manager = await this.usersRepo.findOne({
         where: { id: currentUser.userId },
         relations: ['managedDepartments'],
@@ -125,11 +161,11 @@ export class PermissionsService {
       const managedDeptIds = (manager.managedDepartments || []).map(
         (d) => d.id,
       );
+
       if (managedDeptIds.length === 0) {
         return [];
       }
 
-      // Bu departamentlərdə olan işçilərin icazələri
       return this.permRepo
         .createQueryBuilder('perm')
         .leftJoinAndSelect('perm.employee', 'employee')
@@ -146,6 +182,7 @@ export class PermissionsService {
         .getMany();
     }
 
+    // 4) Qalan bütün rollar üçün qadağandır
     throw new ForbiddenException('Bu əməliyyat üçün icazən yoxdur');
   }
 
@@ -175,11 +212,12 @@ export class PermissionsService {
     if (
       ![
         UserRole.COMPANY_ADMIN,
+        UserRole.HEAD_OF_HR,
         UserRole.HR,
+        UserRole.HEAD_OF_DEPARTMENT,
         UserRole.MANAGER,
       ].includes(currentUser.role)
     ) {
-      // audit: icazəsi olmayan biri approve etməyə çalışdı
       await this.logPermissionAction({
         companyId: currentUser.companyId,
         action: PermissionAuditAction.APPROVE,
@@ -199,7 +237,7 @@ export class PermissionsService {
     // 2) Employee + departament + status
     const employee = await this.usersRepo.findOne({
       where: { id: perm.employee.id },
-      relations: ['department'],
+      relations: ['department', 'department.headOfDepartment'],
     });
 
     if (!employee) {
@@ -232,7 +270,22 @@ export class PermissionsService {
       );
     }
 
-    // 3) Manager üçün: yalnız öz idarə etdiyi departamentdəki employee
+    // ❌ Self-approve qadağası (heç kim öz icazəsini təsdiq edə bilməz)
+    if (currentUser.userId === employee.id) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.APPROVE,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'İstifadəçi öz icazəsini approve etməyə çalışdı',
+      });
+
+      throw new ForbiddenException('Öz icazəni təsdiq edə bilməzsən');
+    }
+
+    // 3) MANAGER üçün: yalnız öz idarə etdiyi departamentdəki employee
     if (currentUser.role === UserRole.MANAGER) {
       const manager = await this.usersRepo.findOne({
         where: { id: currentUser.userId },
@@ -276,7 +329,29 @@ export class PermissionsService {
       }
     }
 
-    // 4) Artıq yekun vəziyyətdədirsə (APPROVED/REJECTED) – block
+    // 4) HEAD_OF_DEPARTMENT üçün: yalnız öz departamentinin işçiləri
+    if (currentUser.role === UserRole.HEAD_OF_DEPARTMENT) {
+      const head = await this.findHeadOfDepartmentForEmployee(employee.id);
+
+      if (!head || head.id !== currentUser.userId) {
+        await this.logPermissionAction({
+          companyId: currentUser.companyId,
+          permission: perm,
+          actorId: currentUser.userId,
+          action: PermissionAuditAction.APPROVE,
+          result: PermissionAuditResult.FAILURE,
+          previousStatus: perm.status,
+          reason:
+            'HEAD_OF_DEPARTMENT başqa departamentə aid employee üçün approve etməyə çalışdı',
+        });
+
+        throw new ForbiddenException(
+          'Bu icazə üçün bu istifadəçini təsdiq etməyə səlahiyyətin yoxdur (başqa departament və ya bu departamentin rəhbəri deyilsən).',
+        );
+      }
+    }
+
+    // 5) Artıq yekun vəziyyətdədirsə – block
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
         perm.status,
@@ -298,7 +373,7 @@ export class PermissionsService {
       );
     }
 
-    // 5) Approver user
+    // 6) Approver user
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
     });
@@ -316,7 +391,7 @@ export class PermissionsService {
       throw new ForbiddenException('Approver tapılmadı');
     }
 
-    // 6) Approval chain + step check
+    // 7) Approval chain + step check
     const chain = await this.getApprovalChainForPermission(
       currentUser.companyId,
       perm.employee,
@@ -359,14 +434,14 @@ export class PermissionsService {
       );
     }
 
-    // 7) Approval addımı DB-yə yaz
+    // 8) Approval addımı DB-yə yaz
     const approval = this.approvalRepo.create({
       permission: perm,
       approver,
       role: currentUser.role,
       stepNumber: nextStepIndex + 1,
       status: PermissionStatus.APPROVED,
-      comment: dto.managerComment,
+      comment: dto.comment,
     });
     await this.approvalRepo.save(approval);
 
@@ -376,16 +451,16 @@ export class PermissionsService {
     if (isLastStep) {
       perm.status = PermissionStatus.APPROVED;
       perm.approvedBy = approver;
-      perm.managerComment = dto.managerComment;
+      perm.comment = dto.comment;
       perm.decidedAt = new Date();
     } else {
       perm.status = PermissionStatus.IN_PROGRESS;
-      perm.managerComment = dto.managerComment ?? perm.managerComment;
+      perm.comment = dto.comment ?? perm.comment;
     }
 
     const saved = await this.permRepo.save(perm);
 
-    // 8) SUCCESS audit log
+    // 9) SUCCESS audit log
     await this.logPermissionAction({
       companyId: currentUser.companyId,
       permission: saved,
@@ -394,7 +469,7 @@ export class PermissionsService {
       result: PermissionAuditResult.SUCCESS,
       previousStatus: prevStatus,
       newStatus: saved.status,
-      reason: dto.managerComment,
+      reason: dto.comment,
     });
 
     return saved;
@@ -410,7 +485,9 @@ export class PermissionsService {
     if (
       ![
         UserRole.COMPANY_ADMIN,
+        UserRole.HEAD_OF_HR,
         UserRole.HR,
+        UserRole.HEAD_OF_DEPARTMENT,
         UserRole.MANAGER,
       ].includes(currentUser.role)
     ) {
@@ -433,7 +510,7 @@ export class PermissionsService {
     // 2) Employee + departament + status
     const employee = await this.usersRepo.findOne({
       where: { id: perm.employee.id },
-      relations: ['department'],
+      relations: ['department', 'department.headOfDepartment'],
     });
     if (!employee) {
       await this.logPermissionAction({
@@ -464,6 +541,21 @@ export class PermissionsService {
       throw new ForbiddenException(
         'Deaktiv edilmiş istifadəçinin icazəsi üzərində əməliyyat aparıla bilməz',
       );
+    }
+
+    // ❌ Self-reject qadağası (heç kim öz icazəsini rədd edə bilməz)
+    if (currentUser.userId === employee.id) {
+      await this.logPermissionAction({
+        companyId: currentUser.companyId,
+        permission: perm,
+        actorId: currentUser.userId,
+        action: PermissionAuditAction.REJECT,
+        result: PermissionAuditResult.FAILURE,
+        previousStatus: perm.status,
+        reason: 'İstifadəçi öz icazəsini reject etməyə çalışdı',
+      });
+
+      throw new ForbiddenException('Öz icazəni rədd edə bilməzsən');
     }
 
     // 3) Manager üçün: yalnız öz departamentindəki employee
@@ -511,7 +603,29 @@ export class PermissionsService {
       }
     }
 
-    // 4) Artıq yekun vəziyyətdədirsə – block
+    // 4) HEAD_OF_DEPARTMENT üçün: yalnız öz departamentinin işçiləri
+    if (currentUser.role === UserRole.HEAD_OF_DEPARTMENT) {
+      const head = await this.findHeadOfDepartmentForEmployee(employee.id);
+
+      if (!head || head.id !== currentUser.userId) {
+        await this.logPermissionAction({
+          companyId: currentUser.companyId,
+          permission: perm,
+          actorId: currentUser.userId,
+          action: PermissionAuditAction.REJECT,
+          result: PermissionAuditResult.FAILURE,
+          previousStatus: perm.status,
+          reason:
+            'HEAD_OF_DEPARTMENT başqa departamentə aid employee üçün reject etməyə çalışdı',
+        });
+
+        throw new ForbiddenException(
+          'Bu icazə üçün bu istifadəçini rədd etməyə səlahiyyətin yoxdur (başqa departament və ya bu departamentin rəhbəri deyilsən).',
+        );
+      }
+    }
+
+    // 5) Artıq yekun vəziyyətdədirsə – block
     if (
       [PermissionStatus.APPROVED, PermissionStatus.REJECTED].includes(
         perm.status,
@@ -533,7 +647,7 @@ export class PermissionsService {
       );
     }
 
-    // 5) Approver user
+    // 6) Approver user
     const approver = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
     });
@@ -551,7 +665,7 @@ export class PermissionsService {
       throw new ForbiddenException('Approver tapılmadı');
     }
 
-    // 6) Approval chain + step check
+    // 7) Approval chain + step check
     const chain = await this.getApprovalChainForPermission(
       currentUser.companyId,
       perm.employee,
@@ -577,14 +691,14 @@ export class PermissionsService {
       );
     }
 
-    // 7) Approval addımı (REJECT) yaz
+    // 8) Approval addımı (REJECT) yaz
     const approval = this.approvalRepo.create({
       permission: perm,
       approver,
       role: currentUser.role,
       stepNumber: nextStepIndex + 1,
       status: PermissionStatus.REJECTED,
-      comment: dto.managerComment,
+      comment: dto.comment,
     });
     await this.approvalRepo.save(approval);
 
@@ -592,12 +706,12 @@ export class PermissionsService {
 
     perm.status = PermissionStatus.REJECTED;
     perm.approvedBy = approver;
-    perm.managerComment = dto.managerComment;
+    perm.comment = dto.comment;
     perm.decidedAt = new Date();
 
     const saved = await this.permRepo.save(perm);
 
-    // 8) SUCCESS audit log
+    // 9) SUCCESS audit log
     await this.logPermissionAction({
       companyId: currentUser.companyId,
       permission: saved,
@@ -606,7 +720,7 @@ export class PermissionsService {
       result: PermissionAuditResult.SUCCESS,
       previousStatus: prevStatus,
       newStatus: saved.status,
-      reason: dto.managerComment,
+      reason: dto.comment,
     });
 
     return saved;
@@ -763,7 +877,10 @@ export class PermissionsService {
 
     const [sh, sm] = startTime.split(':').map(Number);
     const [eh, em] = endTime.split(':').map(Number);
-    const requestedHours = (eh + em / 60) - (sh + sm / 60);
+
+    const startHours = sh + (sm || 0) / 60;
+    const endHours = eh + (em || 0) / 60;
+    const requestedHours = endHours - startHours;
 
     if (requestedHours <= 0) {
       throw new ForbiddenException(
@@ -794,8 +911,20 @@ export class PermissionsService {
       })
       .getMany();
 
-    // TODO: Burada hər existing short leave üçün saat hesablayıb cəmləmək olar.
-    const usedHours = 0;
+    let usedHours = 0;
+
+    for (const p of existing) {
+      if (!p.startTime || !p.endTime) continue;
+
+      const [esh, esm] = p.startTime.split(':').map(Number);
+      const [eeh, eem] = p.endTime.split(':').map(Number);
+
+      const eStartHours = esh + (esm || 0) / 60;
+      const eEndHours = eeh + (eem || 0) / 60;
+      const hours = Math.max(0, eEndHours - eStartHours);
+
+      usedHours += hours;
+    }
 
     const total = usedHours + requestedHours;
     if (total > limitHours) {
@@ -859,45 +988,134 @@ export class PermissionsService {
     }
   }
 
-  // Sadə approval chain generator
-  // Real həyatda bunu company / department / permissionType üzrə konfiqurable edə bilərsən.
+  // Sadə approval chain generator (yeni rollarla)
+  // EMPLOYEE / MANAGER / HEAD_OF_DEPARTMENT / HR / HEAD_OF_HR üçün fərqli chain qaytarır
   private async getApprovalChainForPermission(
     companyId: number,
     employee: User,
     type: PermissionType,
   ): Promise<UserRole[]> {
-    // Sadə qayda:
-    // SHORT_LEAVE & REMOTE_WORK: Manager → HR
-    // ANNUAL / SICK / UNPAID / BUSINESS_TRIP: Manager → HR → COMPANY_ADMIN
-    const base: UserRole[] = [UserRole.MANAGER, UserRole.HR];
-
-    const longTypes = [
-      PermissionType.ANNUAL_LEAVE,
-      PermissionType.SICK_LEAVE,
-      PermissionType.UNPAID_LEAVE,
-      PermissionType.BUSINESS_TRIP,
-    ];
-
-    if (longTypes.includes(type)) {
-      base.push(UserRole.COMPANY_ADMIN);
-    }
-
-    // Əgər employee-nin departamentində manager yoxdursa, chain-dən MANAGER-i çıxara bilərik.
-    const relations = await this.usersRepo.findOne({
+    // Employee-ni departamenti ilə birlikdə götürək
+    const fullEmployee = await this.usersRepo.findOne({
       where: { id: employee.id },
       relations: ['department', 'department.manager'],
     });
 
-    const hasManager =
-      relations?.department && relations.department.manager
-        ? true
-        : false;
-
-    if (!hasManager) {
-      return base.filter((r) => r !== UserRole.MANAGER);
+    if (!fullEmployee) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
     }
 
-    return base;
+    const isShortType =
+      type === PermissionType.SHORT_LEAVE ||
+      type === PermissionType.REMOTE_WORK;
+
+    let base: UserRole[] = [];
+
+    // 1) Role + permission type-ə görə "ideal" chain
+    switch (fullEmployee.role) {
+      case UserRole.EMPLOYEE:
+        if (isShortType) {
+          // EMPLOYEE (qısa icazə) → MANAGER → HEAD_OF_DEPARTMENT → HR
+          base = [
+            UserRole.MANAGER,
+            UserRole.HEAD_OF_DEPARTMENT,
+            UserRole.HR,
+          ];
+        } else {
+          // EMPLOYEE (uzun icazə) → MANAGER → HEAD_OF_DEPARTMENT → HEAD_OF_HR → COMPANY_ADMIN
+          base = [
+            UserRole.MANAGER,
+            UserRole.HEAD_OF_DEPARTMENT,
+            UserRole.HEAD_OF_HR,
+            UserRole.COMPANY_ADMIN,
+          ];
+        }
+        break;
+
+      case UserRole.MANAGER:
+        // MANAGER → HEAD_OF_DEPARTMENT → HEAD_OF_HR → COMPANY_ADMIN
+        base = [
+          UserRole.HEAD_OF_DEPARTMENT,
+          UserRole.HEAD_OF_HR,
+          UserRole.COMPANY_ADMIN,
+        ];
+        break;
+
+      case UserRole.HEAD_OF_DEPARTMENT:
+        // HEAD_OF_DEPARTMENT → HEAD_OF_HR → COMPANY_ADMIN
+        base = [UserRole.HEAD_OF_HR, UserRole.COMPANY_ADMIN];
+        break;
+
+      case UserRole.HR:
+        // HR → HEAD_OF_HR → COMPANY_ADMIN
+        base = [UserRole.HEAD_OF_HR, UserRole.COMPANY_ADMIN];
+        break;
+
+      case UserRole.HEAD_OF_HR:
+        // HEAD_OF_HR → COMPANY_ADMIN
+        base = [UserRole.COMPANY_ADMIN];
+        break;
+
+      case UserRole.COMPANY_ADMIN:
+        base = [];
+        break;
+
+      default:
+        base = [];
+    }
+
+    // 2) Employee öz rolunu chain-dən çıxar (self-approve olmasın)
+    base = base.filter((r) => r !== fullEmployee.role);
+
+    // 3) Helper-lərlə real mövcud step-ləri filtr elə
+    const result: UserRole[] = [];
+
+    for (const role of base) {
+      if (role === UserRole.MANAGER) {
+        const manager = fullEmployee.department?.manager;
+        if (manager) {
+          result.push(role);
+        }
+        continue;
+      }
+
+      if (role === UserRole.HEAD_OF_DEPARTMENT) {
+        const head = await this.findHeadOfDepartmentForEmployee(fullEmployee.id);
+        if (head) {
+          result.push(role);
+        }
+        continue;
+      }
+
+      if (role === UserRole.HR) {
+        const hr = await this.findAnyHr(companyId);
+        if (hr) {
+          result.push(role);
+        }
+        continue;
+      }
+
+      if (role === UserRole.HEAD_OF_HR) {
+        const headOfHr = await this.findHeadOfHr(companyId);
+        if (headOfHr) {
+          result.push(role);
+        }
+        continue;
+      }
+
+      if (role === UserRole.COMPANY_ADMIN) {
+        const admin = await this.findAnyCompanyAdmin(companyId);
+        if (admin) {
+          result.push(role);
+        }
+        continue;
+      }
+
+      // fallback
+      result.push(role);
+    }
+
+    return result;
   }
 
   private async getApprovalHistory(
@@ -950,7 +1168,9 @@ export class PermissionsService {
     const from = new Date(targetYear, 0, 1);
     const to = new Date(targetYear, 11, 31);
 
-    // APPROVED icazələr
+    // ─────────────────────────────────────────────
+    // 1) İllik məzuniyyət günləri (APPROVED)
+    // ─────────────────────────────────────────────
     const approved = await this.permRepo
       .createQueryBuilder('perm')
       .leftJoin('perm.employee', 'employee')
@@ -971,7 +1191,9 @@ export class PermissionsService {
       0,
     );
 
-    // 🔥 Pending icazələr də hesablansın (Pending + InProgress)
+    // ─────────────────────────────────────────────
+    // 2) Pending / InProgress illik məzuniyyət günləri
+    // ─────────────────────────────────────────────
     const pending = await this.permRepo
       .createQueryBuilder('perm')
       .leftJoin('perm.employee', 'employee')
@@ -993,11 +1215,7 @@ export class PermissionsService {
     );
 
     const entitlementDays = policy.annualLeaveDaysPerYear;
-
-    const remainingDays = Math.max(
-      entitlementDays - usedDays - pendingDays,
-      0,
-    );
+    const remainingDays = Math.max(entitlementDays - usedDays - pendingDays, 0);
 
     const dto = new LeaveBalanceDto();
     dto.year = targetYear;
@@ -1005,6 +1223,69 @@ export class PermissionsService {
     dto.usedDays = usedDays;
     dto.pendingDays = pendingDays;
     dto.remainingDays = remainingDays;
+
+    // ─────────────────────────────────────────────
+    // 3) Short leave aylıq saat balansı
+    // ─────────────────────────────────────────────
+    // Əgər şirkətdə short leave limiti konfiqurasiya olunmayıbsa, saatları boş buraxırıq
+    if (policy.maxShortLeaveHoursPerMonth != null) {
+      const now = new Date();
+      const monthYear = now.getFullYear();
+      const month = now.getMonth(); // 0-based
+
+      const monthStart = new Date(monthYear, month, 1);
+      const monthEnd = new Date(monthYear, month + 1, 0);
+
+      const shortLeaves = await this.permRepo
+        .createQueryBuilder('perm')
+        .leftJoin('perm.employee', 'employee')
+        .leftJoin('perm.company', 'company')
+        .where('company.id = :companyId', { companyId: company.id })
+        .andWhere('employee.id = :employeeId', { employeeId: employee.id })
+        .andWhere('perm.type = :type', {
+          type: PermissionType.SHORT_LEAVE,
+        })
+        .andWhere('perm.status IN (:...statuses)', {
+          statuses: [
+            PermissionStatus.PENDING,
+            PermissionStatus.IN_PROGRESS,
+            PermissionStatus.APPROVED,
+          ],
+        })
+        .andWhere('perm.startDate BETWEEN :from AND :to', {
+          from: monthStart,
+          to: monthEnd,
+        })
+        .getMany();
+
+      let usedShort = 0;
+      let pendingShort = 0;
+
+      for (const p of shortLeaves) {
+        if (!p.startTime || !p.endTime) continue;
+
+        const [sh, sm] = p.startTime.split(':').map(Number);
+        const [eh, em] = p.endTime.split(':').map(Number);
+
+        const startHours = sh + (sm || 0) / 60;
+        const endHours = eh + (em || 0) / 60;
+        const hours = Math.max(0, endHours - startHours);
+
+        if (p.status === PermissionStatus.APPROVED) {
+          usedShort += hours;
+        } else {
+          // PENDING və IN_PROGRESS-i pending kimi hesab edirik
+          pendingShort += hours;
+        }
+      }
+
+      dto.usedShortLeaveHoursThisMonth = Number(usedShort.toFixed(1));
+      const remainingShort =
+        policy.maxShortLeaveHoursPerMonth - usedShort - pendingShort;
+      dto.remainingShortLeaveHoursThisMonth = Number(
+        Math.max(0, remainingShort).toFixed(1),
+      );
+    }
 
     return dto;
   }
@@ -1059,21 +1340,48 @@ export class PermissionsService {
     }
 
     if (targetUser.status !== UserStatus.ACTIVE) {
-      // Burada da istersen 0 balans qaytara bilərsən, indi daha sərt saxladım
+      // İstəsən burda 0 balans da qaytara bilərsən, indi sərt saxlayırıq
       throw new ForbiddenException(
         'Deaktiv istifadəçi üçün məzuniyyət balansı göstərilə bilməz',
       );
     }
 
-    // COMPANY_ADMIN və HR bütün şirkəti görür
+    // 1) Bütün şirkəti görə bilən rollar:
+    // COMPANY_ADMIN, HR, HEAD_OF_HR
     if (
       currentUser.role === UserRole.COMPANY_ADMIN ||
-      currentUser.role === UserRole.HR
+      currentUser.role === UserRole.HR ||
+      currentUser.role === UserRole.HEAD_OF_HR
     ) {
       return this.calculateLeaveBalance(company, targetUser);
     }
 
-    // MANAGER yalnız öz departamentindəki işçiləri görsün
+    // 2) HEAD_OF_DEPARTMENT → yalnız öz headedDepartments-dəki işçilər
+    if (currentUser.role === UserRole.HEAD_OF_DEPARTMENT) {
+      const head = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['headedDepartments'],
+      });
+
+      if (!head) {
+        throw new ForbiddenException('Head of Department tapılmadı');
+      }
+
+      const headedDeptIds = (head.headedDepartments || []).map((d) => d.id);
+
+      if (
+        !targetUser.department ||
+        !headedDeptIds.includes(targetUser.department.id)
+      ) {
+        throw new ForbiddenException(
+          'Bu istifadəçi üçün məzuniyyət balansına baxmağa səlahiyyətin yoxdur (başqa departament).',
+        );
+      }
+
+      return this.calculateLeaveBalance(company, targetUser);
+    }
+
+    // 3) MANAGER → yalnız öz managedDepartments-dəki işçilər
     if (currentUser.role === UserRole.MANAGER) {
       const manager = await this.usersRepo.findOne({
         where: { id: currentUser.userId },
@@ -1093,17 +1401,15 @@ export class PermissionsService {
         !managedDeptIds.includes(targetUser.department.id)
       ) {
         throw new ForbiddenException(
-          'Bu istifadəçi üçün məzuniyyət balansına baxmağa səlahiyyətin yoxdur',
+          'Bu istifadəçi üçün məzuniyyət balansına baxmağa səlahiyyətin yoxdur (başqa departament).',
         );
       }
 
       return this.calculateLeaveBalance(company, targetUser);
     }
 
-    // Digər rollar üçün qadağandır
-    throw new ForbiddenException(
-      'Bu əməliyyat üçün səlahiyyətiniz yoxdur',
-    );
+    // 4) Qalan bütün rollar üçün qadağandır
+    throw new ForbiddenException('Bu əməliyyat üçün səlahiyyətiniz yoxdur');
   }
 
 
@@ -1142,53 +1448,233 @@ export class PermissionsService {
   }
 
   async getPermissionAuditLog(
-  currentUser: { userId: number; companyId: number; role: UserRole },
-  permissionId: number,
-): Promise<PermissionAuditDto[]> {
-  if (
-    ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
-  ) {
-    throw new ForbiddenException(
-      'Audit logları görmək üçün səlahiyyət yoxdur',
-    );
-  }
-
-  const perm = await this.findOneInCompanyOrThrow(
-    currentUser.companyId,
-    permissionId,
-  );
-
-  const audits = await this.auditRepo.find({
-    where: {
-      company: { id: currentUser.companyId },
-      permission: { id: perm.id },
-    },
-    relations: ['actor'],
-    order: { createdAt: 'ASC' },
-  });
-
-  return audits.map((a) => {
-    const dto = new PermissionAuditDto();
-    dto.id = a.id;
-    dto.action = a.action;
-    dto.result = a.result;
-    dto.previousStatus = a.previousStatus;
-    dto.newStatus = a.newStatus;
-    dto.reason = a.reason;
-    dto.createdAt = a.createdAt;
-
-    if (a.actor) {
-      const actorDto = new PermissionAuditActorDto();
-      actorDto.id = a.actor.id;
-      actorDto.name = a.actor.name;
-      actorDto.email = a.actor.email;
-      actorDto.role = a.actor.role;
-      dto.actor = actorDto;
-    } else {
-      dto.actor = null;
+    currentUser: { userId: number; companyId: number; role: UserRole },
+    permissionId: number,
+  ): Promise<PermissionAuditDto[]> {
+    if (
+      ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+    ) {
+      throw new ForbiddenException(
+        'Audit logları görmək üçün səlahiyyət yoxdur',
+      );
     }
 
-    return dto;
-  });
-}
+    const perm = await this.findOneInCompanyOrThrow(
+      currentUser.companyId,
+      permissionId,
+    );
+
+    const audits = await this.auditRepo.find({
+      where: {
+        company: { id: currentUser.companyId },
+        permission: { id: perm.id },
+      },
+      relations: ['actor'],
+      order: { createdAt: 'ASC' },
+    });
+
+    return audits.map((a) => {
+      const dto = new PermissionAuditDto();
+      dto.id = a.id;
+      dto.action = a.action;
+      dto.result = a.result;
+      dto.previousStatus = a.previousStatus;
+      dto.newStatus = a.newStatus;
+      dto.reason = a.reason;
+      dto.createdAt = a.createdAt;
+
+      if (a.actor) {
+        const actorDto = new PermissionAuditActorDto();
+        actorDto.id = a.actor.id;
+        actorDto.name = a.actor.name;
+        actorDto.email = a.actor.email;
+        actorDto.role = a.actor.role;
+        dto.actor = actorDto;
+      } else {
+        dto.actor = null;
+      }
+
+      return dto;
+    });
+  }
+
+
+  async getPermissionDetails(
+    currentUser: { userId: number; companyId: number; role: UserRole },
+    permissionId: number,
+  ): Promise<PermissionDetailsDto> {
+    // 1) İcazəni şirkət scope-u ilə tap
+    const perm = await this.permRepo.findOne({
+      where: { id: permissionId },
+      relations: ['company', 'employee', 'employee.department', 'approvedBy'],
+    });
+
+    if (!perm || perm.company.id !== currentUser.companyId) {
+      throw new NotFoundException('İcazə tapılmadı');
+    }
+
+    // 2) Access control:
+    const isOwner = perm.employee.id === currentUser.userId;
+
+    const approverRoles: UserRole[] = [
+      UserRole.COMPANY_ADMIN,
+      UserRole.HR,
+      UserRole.HEAD_OF_HR,
+      UserRole.MANAGER,
+      UserRole.HEAD_OF_DEPARTMENT,
+    ];
+
+    const isApproverRole = approverRoles.includes(currentUser.role);
+
+    if (!isOwner && !isApproverRole) {
+      throw new ForbiddenException(
+        'Bu icazənin detallarını görməyə səlahiyyətin yoxdur',
+      );
+    }
+
+    // Manager / Head_of_Department üçün departament scope check
+    if (isApproverRole && (currentUser.role === UserRole.MANAGER || currentUser.role === UserRole.HEAD_OF_DEPARTMENT)) {
+      const viewer = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['managedDepartments', 'headedDepartments'],
+      });
+
+      if (!viewer) {
+        throw new ForbiddenException('İstifadəçi tapılmadı');
+      }
+
+      const managedDeptIds =
+        (viewer.managedDepartments || []).map((d) => d.id);
+
+      const headedDeptIds =
+        (viewer.headedDepartments || []).map((d) => d.id);
+
+      const allowedDeptIds = [...managedDeptIds, ...headedDeptIds];
+
+      const employeeDeptId = perm.employee.department?.id;
+
+      if (!employeeDeptId || !allowedDeptIds.includes(employeeDeptId)) {
+        throw new ForbiddenException(
+          'Bu icazə üzrə bu istifadəçi üçün detala baxmağa səlahiyyətin yoxdur (başqa departament).',
+        );
+      }
+    }
+
+    // 3) Chain + history
+    const chainRoles = await this.getApprovalChainForPermission(
+      perm.company.id,
+      perm.employee,
+      perm.type,
+    );
+
+    const history = await this.getApprovalHistory(perm.id); // PermissionApproval[] ASC
+
+    const approvals: PermissionApprovalStepDto[] = history.map((h) => ({
+      stepNumber: h.stepNumber,
+      role: h.role,
+      status: h.status,
+      approverName: h.approver?.name,
+      approverEmail: h.approver?.email,
+      comment: h.comment ?? undefined,
+      // Entity-də createdAt TS tərəfdə deklarasiya olunmayıbsa:
+      actedAt: (h as any).createdAt ?? undefined,
+    }));
+
+    const chain: PermissionChainStepDto[] = chainRoles.map((role, index) => ({
+      stepNumber: index + 1,
+      role,
+      isCompleted: history.some((h) => h.stepNumber === index + 1),
+    }));
+
+    // 4) Hazırkı holder rolu (son step tamam olmayıbsa)
+    const isFinished =
+      perm.status === PermissionStatus.APPROVED ||
+      perm.status === PermissionStatus.REJECTED;
+
+    let currentHolderRole: UserRole | null = null;
+
+    if (!isFinished) {
+      const nextStepIndex = history.length; // 0-based
+      currentHolderRole = chainRoles[nextStepIndex] ?? null;
+    }
+
+    // 5) Employee DTO
+    const employeeDto: PermissionEmployeeDto = {
+      id: perm.employee.id,
+      name: perm.employee.name,
+      email: perm.employee.email,
+      departmentName: perm.employee.department?.name,
+    };
+
+    // 6) Final approver (ancaq APPROVED üçün)
+    const finalApproverName =
+      perm.status === PermissionStatus.APPROVED && perm.approvedBy
+        ? perm.approvedBy.name
+        : undefined;
+
+    const finalApproverEmail =
+      perm.status === PermissionStatus.APPROVED && perm.approvedBy
+        ? perm.approvedBy.email
+        : undefined;
+
+    // 7) Nəticə DTO
+    const details = new PermissionDetailsDto();
+    details.id = perm.id;
+    details.type = perm.type;
+    details.status = perm.status;
+    details.createdAt = perm.createdAt;
+    details.decidedAt = perm.decidedAt ?? undefined;
+    details.startDate = perm.startDate;
+    details.endDate = perm.endDate ?? undefined;
+    details.startTime = perm.startTime ?? undefined;
+    details.endTime = perm.endTime ?? undefined;
+    details.reason = perm.reason ?? undefined;
+    details.comment = perm.comment ?? undefined;
+    details.employee = employeeDto;
+    details.finalApproverName = finalApproverName;
+    details.finalApproverEmail = finalApproverEmail;
+    details.currentHolderRole = currentHolderRole;
+    details.chain = chain;
+    details.approvals = approvals;
+
+    return details;
+  }
+
+  private async findHeadOfDepartmentForEmployee(
+    employeeId: number,
+  ): Promise<User | null> {
+    const employee = await this.usersRepo.findOne({
+      where: { id: employeeId },
+      relations: ['department', 'department.headOfDepartment'],
+    });
+
+    return employee?.department?.headOfDepartment ?? null;
+  }
+
+  private async findHeadOfHr(companyId: number): Promise<User | null> {
+    return this.usersRepo.findOne({
+      where: {
+        company: { id: companyId },
+        role: UserRole.HEAD_OF_HR,
+      },
+    });
+  }
+
+  private async findAnyHr(companyId: number): Promise<User | null> {
+    return this.usersRepo.findOne({
+      where: {
+        company: { id: companyId },
+        role: UserRole.HR,
+      },
+    });
+  }
+
+  private async findAnyCompanyAdmin(companyId: number): Promise<User | null> {
+    return this.usersRepo.findOne({
+      where: {
+        company: { id: companyId },
+        role: UserRole.COMPANY_ADMIN,
+      },
+    });
+  }
 }

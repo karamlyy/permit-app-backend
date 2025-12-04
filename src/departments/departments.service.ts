@@ -10,6 +10,7 @@ import { Company } from '../companies/company.entity';
 import { User } from '../users/user.entity';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
+import { UserRole } from 'src/common/enums/user-role.enum';
 
 @Injectable()
 export class DepartmentsService {
@@ -20,7 +21,7 @@ export class DepartmentsService {
     private readonly companyRepo: Repository<Company>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
-  ) {}
+  ) { }
 
   async createForCompany(
     companyId: number,
@@ -52,18 +53,43 @@ export class DepartmentsService {
     const dept = this.deptRepo.create({
       name: dto.name,
       company,
-      // null-u undefined-ə çeviririk ki, type uyğun gəlsin
       manager: manager ?? undefined,
     });
 
     return this.deptRepo.save(dept);
   }
 
+
+
   async findAllForCompany(companyId: number): Promise<Department[]> {
-    return this.deptRepo.find({
+    const departments = await this.deptRepo.find({
       where: { company: { id: companyId } },
-      relations: ['manager'],
+      relations: ['manager', 'headOfDepartment'],
       order: { createdAt: 'ASC' },
     });
+
+    // ⭐ HEAD_OF_HR varsa → onun departamenti HR-dir
+    const headOfHr = await this.usersRepo.findOne({
+      where: {
+        company: { id: companyId },
+        role: UserRole.HEAD_OF_HR,
+      },
+      relations: ['department'],
+    });
+
+    const hrDeptId = headOfHr?.department?.id;
+
+    for (const dept of departments) {
+      // ⭐ Əgər HR departamentidirsə
+      if (dept.id === hrDeptId) {
+        // manager həmişə null
+        dept.manager = null;
+
+        // headOfDepartment = HEAD_OF_HR user
+        dept.headOfDepartment = headOfHr ?? null;
+      }
+    }
+
+    return departments;
   }
 }

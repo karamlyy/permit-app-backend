@@ -15,7 +15,6 @@ import { UserResponseDto } from './dto/user-response.dto';
 import { UserStatus } from 'src/common/enums/user-status.enum';
 import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
 import { SearchUsersDto } from './dto/search-users.dto';
-import { Company } from 'src/companies/company.entity';
 
 @Injectable()
 export class UsersService {
@@ -24,9 +23,7 @@ export class UsersService {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(Department)
     private readonly deptRepo: Repository<Department>,
-    //@InjectRepository(Company)
-    //private readonly companyRepo: Repository<Company>,
-  ) {}
+  ) { }
 
   private toUserResponse(user: User): UserResponseDto {
     const dto = new UserResponseDto();
@@ -44,13 +41,19 @@ export class UsersService {
     currentUser: { companyId: number; role: UserRole },
     dto: CreateUserDto,
   ): Promise<UserResponseDto> {
-    // HR COMPANY_ADMIN yarada bilməsin
+    // 0) Kim user yarada bilər? → COMPANY_ADMIN və HEAD_OF_HR
     if (
-      currentUser.role === UserRole.HR &&
-      dto.role === UserRole.COMPANY_ADMIN
+      ![UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR].includes(currentUser.role)
     ) {
       throw new ForbiddenException(
-        'HR yeni Company Admin yarada bilməz',
+        'İstifadəçi yaratmaq üçün səlahiyyət yoxdur (yalnız COMPANY_ADMIN və HEAD_OF_HR).',
+      );
+    }
+
+    // Bu endpoint-dən COMPANY_ADMIN yaratmağı qadağan edirik
+    if (dto.role === UserRole.COMPANY_ADMIN) {
+      throw new ForbiddenException(
+        'Company Admin yalnız şirkət qeydiyyatı zamanı yaradıla bilər',
       );
     }
 
@@ -82,9 +85,36 @@ export class UsersService {
       department = found;
     }
 
+    // HEAD_OF_DEPARTMENT üçün departament mütləqdir
+    if (dto.role === UserRole.HEAD_OF_DEPARTMENT && !department) {
+      throw new BadRequestException(
+        'HEAD_OF_DEPARTMENT üçün departmentId mütləq verilməlidir',
+      );
+    }
+
+    // HEAD_OF_HR üçün → HR departamentində olmalıdır
+    if (dto.role === UserRole.HEAD_OF_HR) {
+      if (!department) {
+        throw new BadRequestException(
+          'HEAD_OF_HR üçün HR departamentinin ID-si mütləq verilməlidir',
+        );
+      }
+
+      const name = department.name.toLowerCase().trim();
+      const isHrDept =
+        name === 'hr' ||
+        name === 'human resources' ||
+        name === 'hr department';
+
+      if (!isHrDept) {
+        throw new BadRequestException(
+          'HEAD_OF_HR yalnız HR departamentinə təyin oluna bilər',
+        );
+      }
+    }
+
     const hashed = await bcrypt.hash(dto.password, 10);
 
-    // 🟢 Burda TypeORM üçün single obyekt create edirik
     const user = this.usersRepo.create({
       name: dto.name,
       email: dto.email,
@@ -93,17 +123,26 @@ export class UsersService {
       position: dto.position,
       hireDate: dto.hireDate ? new Date(dto.hireDate) : undefined,
       company: { id: currentUser.companyId } as any,
-      department, // Department | undefined – null yoxdur
+      department,
+      status: UserStatus.ACTIVE,
     });
 
-    // 🟢 save(user) – array yox, tək obyekt
     const saved = await this.usersRepo.save(user);
 
-    // ⭐ Əgər MANAGER-dirsə və department varsa → departamentin manager-i et
+    // MANAGER → departamentin manager-i
     if (saved.role === UserRole.MANAGER && department) {
       department.manager = saved;
       await this.deptRepo.save(department);
     }
+
+    // HEAD_OF_DEPARTMENT → departamentin headOfDepartment-i
+    if (saved.role === UserRole.HEAD_OF_DEPARTMENT && department) {
+      department.headOfDepartment = saved;
+      await this.deptRepo.save(department);
+    }
+
+    // HEAD_OF_HR üçün ayrıca department-linkə ehtiyac yoxdur,
+    // companyId + role = HEAD_OF_HR ilə tapırsan.
 
     return this.toUserResponse(saved);
   }
@@ -112,6 +151,16 @@ export class UsersService {
     currentUser: { companyId: number; role: UserRole },
     userId: number,
   ): Promise<UserResponseDto> {
+    // Yalnız COMPANY_ADMIN və HEAD_OF_HR bu servisi çağırmalıdır
+    // (Controller-də Roles ilə qoruyuruq, amma burada da əlavə qoruma pis deyil)
+    if (
+      ![UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR].includes(currentUser.role)
+    ) {
+      throw new ForbiddenException(
+        'İstifadəçini deaktiv etmək üçün səlahiyyət yoxdur',
+      );
+    }
+
     const user = await this.usersRepo.findOne({
       where: { id: userId },
       relations: ['company'],
@@ -121,18 +170,15 @@ export class UsersService {
       throw new NotFoundException('İstifadəçi tapılmadı');
     }
 
-    // HR başqa COMPANY_ADMIN-i deaktiv edə bilməsin
+    // ⭐ COMPANY_ADMIN yalnız COMPANY_ADMIN tərəfindən deaktiv oluna bilər
     if (
-      currentUser.role === UserRole.HR &&
-      user.role === UserRole.COMPANY_ADMIN
+      user.role === UserRole.COMPANY_ADMIN &&
+      currentUser.role !== UserRole.COMPANY_ADMIN
     ) {
       throw new ForbiddenException(
-        'HR Company Admin istifadəçisini deaktiv edə bilməz',
+        'Company Admin istifadəçisini yalnız Company Admin deaktiv edə bilər',
       );
     }
-
-    // Özünü deaktiv etməyə icazə verib-verməmək sənə qalır, istəsən qadağan edə bilərik
-    // if (currentUser.userId === user.id) { ... }
 
     user.status = UserStatus.INACTIVE;
     const saved = await this.usersRepo.save(user);
@@ -144,6 +190,14 @@ export class UsersService {
     currentUser: { companyId: number; role: UserRole },
     userId: number,
   ): Promise<UserResponseDto> {
+    if (
+      ![UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR].includes(currentUser.role)
+    ) {
+      throw new ForbiddenException(
+        'İstifadəçini aktiv etmək üçün səlahiyyət yoxdur',
+      );
+    }
+
     const user = await this.usersRepo.findOne({
       where: { id: userId },
       relations: ['company'],
@@ -153,13 +207,13 @@ export class UsersService {
       throw new NotFoundException('İstifadəçi tapılmadı');
     }
 
-    // HR yenə də COMPANY_ADMIN üzərində əməliyyat edə bilməsin
+    // ⭐ COMPANY_ADMIN yalnız COMPANY_ADMIN tərəfindən aktiv oluna bilər
     if (
-      currentUser.role === UserRole.HR &&
-      user.role === UserRole.COMPANY_ADMIN
+      user.role === UserRole.COMPANY_ADMIN &&
+      currentUser.role !== UserRole.COMPANY_ADMIN
     ) {
       throw new ForbiddenException(
-        'HR Company Admin istifadəçisini aktiv edə bilməz',
+        'Company Admin istifadəçisini yalnız Company Admin aktiv edə bilər',
       );
     }
 
@@ -174,9 +228,14 @@ export class UsersService {
     userId: number,
     dto: UpdateUserPolicyDto,
   ): Promise<UserResponseDto> {
-    // COMPANY_ADMIN və HR icazə verilir
+
+    // ⭐ Bu əməliyyatı edə bilən rollar:
     if (
-      ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+      ![
+        UserRole.COMPANY_ADMIN,
+        UserRole.HR,
+        UserRole.HEAD_OF_HR
+      ].includes(currentUser.role)
     ) {
       throw new ForbiddenException('Bu əməliyyat üçün səlahiyyət yoxdur');
     }
@@ -190,15 +249,17 @@ export class UsersService {
       throw new NotFoundException('İstifadəçi tapılmadı');
     }
 
-    // HR Company Admin-i dəyişə bilməsin (istəsən, bunu da qoy)
+    // ⭐ Company Admin policy-sini yalnız Company Admin dəyişə bilər
     if (
-      currentUser.role === UserRole.HR &&
-      user.role === UserRole.COMPANY_ADMIN
+      user.role === UserRole.COMPANY_ADMIN &&
+      currentUser.role !== UserRole.COMPANY_ADMIN
     ) {
       throw new ForbiddenException(
-        'HR Company Admin istifadəçisinin policy-sini dəyişə bilməz',
+        'Company Admin istifadəçisinin policy-sini yalnız Company Admin dəyişə bilər',
       );
     }
+
+    // ⭐ Head of HR və HR digər rolların policy-sini dəyişə bilirlər
 
     if (dto.customAnnualLeaveDaysPerYear !== undefined) {
       user.customAnnualLeaveDaysPerYear = dto.customAnnualLeaveDaysPerYear;
@@ -222,11 +283,12 @@ export class UsersService {
     currentUser: { userId: number; companyId: number; role: UserRole },
     dto: SearchUsersDto,
   ): Promise<User[]> {
-    // Kimlər axtarış edə bilər? HR & Admin üçün açıq saxlayaq
     if (
       ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
     ) {
-      throw new ForbiddenException('İstifadəçilər üzrə axtarış üçün səlahiyyət yoxdur');
+      throw new ForbiddenException(
+        'İstifadəçilər üzrə axtarış üçün səlahiyyət yoxdur',
+      );
     }
 
     const qb = this.usersRepo
@@ -235,17 +297,14 @@ export class UsersService {
       .leftJoinAndSelect('user.department', 'department')
       .where('company.id = :companyId', { companyId: currentUser.companyId });
 
-    // 🔹 Role-a görə filter (əsas hissə)
     if (dto.role) {
       qb.andWhere('user.role = :role', { role: dto.role });
     }
 
-    // 🔹 Status filter (optional)
     if (dto.status) {
       qb.andWhere('user.status = :status', { status: dto.status });
     }
 
-    // 🔹 Text search: name və email
     if (dto.q) {
       qb.andWhere(
         '(LOWER(user.name) LIKE LOWER(:q) OR LOWER(user.email) LIKE LOWER(:q))',
@@ -253,7 +312,6 @@ export class UsersService {
       );
     }
 
-    // İstəsən orderBy əlavə edə bilərsən
     qb.orderBy('user.createdAt', 'DESC');
 
     return qb.getMany();
