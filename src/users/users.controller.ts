@@ -25,6 +25,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserPolicyDto } from './dto/update-user-policy.dto';
 import { SearchUsersDto } from './dto/search-users.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UpdateDeviceTokenDto } from './dto/update-device-token.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/enums/user-role.enum';
@@ -201,6 +202,28 @@ Filter-lər:
         role: currentUser.role,
       },
       dto,
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  //  PATCH /me/device-token → hazırkı user üçün FCM token saxla
+  // ─────────────────────────────────────────────
+  @Patch('me/device-token')
+  @ApiOperation({
+    summary: 'Hazırkı istifadəçi üçün FCM device token saxla',
+    description:
+      'Mobil tətbiq bu endpoint vasitəsilə Firebase Cloud Messaging token-ini backend-ə göndərir.',
+  })
+  @ApiOkResponse({
+    description: 'Device token uğurla saxlanıldı',
+  })
+  updateDeviceToken(
+    @CurrentUser() currentUser: any,
+    @Body() dto: UpdateDeviceTokenDto,
+  ): Promise<{ message: string }> {
+    return this.usersService.updateDeviceToken(
+      currentUser.userId,
+      dto.fcmToken,
     );
   }
 }

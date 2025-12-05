@@ -316,4 +316,22 @@ export class UsersService {
 
     return qb.getMany();
   }
+
+  async updateDeviceToken(
+    userId: number,
+    fcmToken: string,
+  ): Promise<{ message: string }> {
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    user.fcmToken = fcmToken;
+    await this.usersRepo.save(user);
+
+    return { message: 'Device token uğurla yeniləndi' };
+  }
 }

@@ -5,9 +5,18 @@ import { PermissionApproval } from './permission-approval.entity';
 import { Company } from '../companies/company.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
+import { PermissionAudit } from './permission-audit.entity';
 import { PermissionsService } from './permissions.service';
 import { PermissionsController } from './permissions.controller';
-import { PermissionAudit } from './permission-audit.entity';
+import { PermissionHelpersService } from './permission-helpers.service';
+import { PermissionChainService } from './permission-chain.service';
+import { PermissionPolicyService } from './permission-policy.service';
+import { PermissionApprovalService } from './permission-approval.service';
+import { PermissionQueryService } from './permission-query.service';
+import { PermissionBalanceService } from './permission-balance.service';
+import { PermissionAuditService } from './permission-audit.service';
+import { PermissionsNotificationService } from './permissions-notification.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -19,8 +28,19 @@ import { PermissionAudit } from './permission-audit.entity';
       Department,
       PermissionAudit,
     ]),
+    NotificationsModule,
   ],
-  providers: [PermissionsService],
+  providers: [
+    PermissionsService,
+    PermissionHelpersService,
+    PermissionChainService,
+    PermissionPolicyService,
+    PermissionApprovalService,
+    PermissionQueryService,
+    PermissionBalanceService,
+    PermissionAuditService,
+    PermissionsNotificationService,
+  ],
   controllers: [PermissionsController],
 })
 export class PermissionsModule {}
