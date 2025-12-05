@@ -55,7 +55,7 @@ export class PermissionsService {
 
     const employee = await this.usersRepo.findOne({
       where: { id: currentUser.userId },
-      relations: ['company'],
+      relations: ['company', 'department'],
     });
     if (!employee || employee.company.id !== currentUser.companyId) {
       throw new ForbiddenException('İstifadəçi bu şirkətə aid deyil');
@@ -68,8 +68,11 @@ export class PermissionsService {
     }
 
     // ⭐ Policy check – company + employee birgə nəzərə alınır
-    await this.validatePolicyForNewPermission(company, employee, dto);
-
+    await this.validatePolicyForNewPermission(
+      company,
+      employee,
+      dto,
+    );
     const perm = this.permRepo.create({
       company,
       employee,
@@ -946,11 +949,20 @@ export class PermissionsService {
     const startDate = new Date(dto.startDate);
     const endDate = dto.endDate ? new Date(dto.endDate) : undefined;
 
+    // 🔹 Overlap yoxlanışı
     if (!policy.allowOverlap) {
       await this.ensureNoOverlap(company.id, employee.id, startDate, endDate);
     }
 
+    // 🔹 ANNUAL_LEAVE üçün advance notice + illik limit
     if (dto.type === PermissionType.ANNUAL_LEAVE) {
+      // 1) Əvvəlcədən xəbərdarlıq (minAdvanceDaysForAnnualLeave)
+      this.ensureAnnualLeaveAdvanceNotice(
+        policy.minAdvanceDaysForAnnualLeave,
+        startDate,
+      );
+
+      // 2) İllik limit (entitlementDays)
       await this.ensureAnnualLeaveLimit(
         company,
         employee.id,
@@ -960,6 +972,7 @@ export class PermissionsService {
       );
     }
 
+    // 🔹 REMOTE_WORK üçün şirkət + user policy
     if (dto.type === PermissionType.REMOTE_WORK) {
       if (!policy.hasRemoteWork) {
         throw new ForbiddenException(
@@ -976,6 +989,7 @@ export class PermissionsService {
       );
     }
 
+    // 🔹 SHORT_LEAVE üçün aylıq saat limiti
     if (dto.type === PermissionType.SHORT_LEAVE) {
       await this.ensureShortLeaveLimit(
         company,
@@ -1129,30 +1143,62 @@ export class PermissionsService {
   }
 
   private getEffectivePolicy(company: Company, employee: User) {
-    const annualLeaveDaysPerYear =
-      employee.customAnnualLeaveDaysPerYear ??
-      company.annualLeaveDaysPerYear;
+  const annualLeaveDaysPerYear =
+    employee.customAnnualLeaveDaysPerYear ??
+    company.annualLeaveDaysPerYear;
 
-    const hasRemoteWork =
-      employee.customHasRemoteWork ?? company.hasRemoteWork;
+  const hasRemoteWork =
+    employee.customHasRemoteWork ??
+    company.hasRemoteWork;
 
-    const maxRemoteDaysPerMonth =
-      employee.customMaxRemoteDaysPerMonth ??
-      company.maxRemoteDaysPerMonth;
+  const maxRemoteDaysPerMonth =
+    employee.customMaxRemoteDaysPerMonth ??
+    company.maxRemoteDaysPerMonth;
 
-    const maxShortLeaveHoursPerMonth =
-      employee.customMaxShortLeaveHoursPerMonth ??
-      company.maxShortLeaveHoursPerMonth;
+  const maxShortLeaveHoursPerMonth =
+    employee.customMaxShortLeaveHoursPerMonth ??
+    company.maxShortLeaveHoursPerMonth;
 
-    const allowOverlap = company.allowOverlap;
+  const allowOverlap = company.allowOverlap;
 
-    return {
-      annualLeaveDaysPerYear,
-      hasRemoteWork,
-      maxRemoteDaysPerMonth,
-      maxShortLeaveHoursPerMonth,
-      allowOverlap,
-    };
+  const minAdvanceDaysForAnnualLeave =
+    company.minAdvanceDaysForAnnualLeave ?? 14; // default 14 gün
+
+  return {
+    annualLeaveDaysPerYear,
+    hasRemoteWork,
+    maxRemoteDaysPerMonth,
+    maxShortLeaveHoursPerMonth,
+    allowOverlap,
+    minAdvanceDaysForAnnualLeave,
+  };
+}
+
+
+  private ensureAnnualLeaveAdvanceNotice(
+    minDays: number,
+    startDate: Date,
+  ): void {
+    if (!minDays || minDays <= 0) {
+      // 0 və ya undefined → məhdudiyyət yoxdur
+      return;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+
+    const diffMs = start.getTime() - today.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays < minDays) {
+      throw new ForbiddenException(
+        `ANNUAL_LEAVE üçün ən azı ${minDays} gün əvvəl müraciət edilməlidir. ` +
+        `Seçilmiş tarix: ${start.toISOString().slice(0, 10)}.`,
+      );
+    }
   }
 
 
@@ -1452,7 +1498,7 @@ export class PermissionsService {
     permissionId: number,
   ): Promise<PermissionAuditDto[]> {
     if (
-      ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+      ![UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR, UserRole.HR].includes(currentUser.role)
     ) {
       throw new ForbiddenException(
         'Audit logları görmək üçün səlahiyyət yoxdur',

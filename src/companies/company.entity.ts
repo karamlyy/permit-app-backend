@@ -96,6 +96,9 @@ export class Company {
 
   @Column({ type: 'bool', default: false })
   allowOverlap: boolean;
+  
+  @Column({ type: 'int', default: 14 })
+  minAdvanceDaysForAnnualLeave: number; // ANNUAL_LEAVE üçün minimal əvvəlcədən xəbərdarlıq (günlə)
 
   @OneToMany(() => User, (user) => user.company)
   users: User[];

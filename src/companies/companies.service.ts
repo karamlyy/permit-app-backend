@@ -15,7 +15,7 @@ export class CompaniesService {
   constructor(
     @InjectRepository(Company)
     private readonly companiesRepo: Repository<Company>,
-  ) { }
+  ) {}
 
   // Admin üçün istənilən company id ilə məlumat almaq (əvvəlki metod)
   async getCompanyById(id: number): Promise<Company> {
@@ -43,13 +43,16 @@ export class CompaniesService {
     return company;
   }
 
-  // Şirkətin policy-lərini yeniləmək (illik gün, remote limit və s.) — sənin əvvəlki kodun
+  // Şirkətin policy-lərini yeniləmək (illik gün, remote limit və s.)
   async updateCompanyPolicy(
     currentUser: { companyId: number; role: UserRole },
     dto: UpdateCompanyPolicyDto,
   ): Promise<Company> {
+    // ✅ Artıq COMPANY_ADMIN və HEAD_OF_HR policy dəyişə bilər
     if (
-      ![UserRole.COMPANY_ADMIN, UserRole.HR].includes(currentUser.role)
+      ![UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR].includes(
+        currentUser.role,
+      )
     ) {
       throw new ForbiddenException('Bu əməliyyat üçün səlahiyyət yoxdur');
     }
@@ -78,6 +81,10 @@ export class CompaniesService {
     if (dto.allowOverlap !== undefined) {
       company.allowOverlap = dto.allowOverlap;
     }
+    if (dto.minAdvanceDaysForAnnualLeave !== undefined) {
+      company.minAdvanceDaysForAnnualLeave =
+        dto.minAdvanceDaysForAnnualLeave;
+    }
 
     return this.companiesRepo.save(company);
   }
@@ -87,6 +94,7 @@ export class CompaniesService {
     currentUser: { companyId: number; role: UserRole },
     dto: UpdateCompanyProfileDto,
   ): Promise<Company> {
+    // ✅ Profil yalnız COMPANY_ADMIN tərəfindən yenilənə bilər
     if (currentUser.role !== UserRole.COMPANY_ADMIN) {
       throw new ForbiddenException(
         'Şirkət profilini yalnız Company Admin yeniləyə bilər',

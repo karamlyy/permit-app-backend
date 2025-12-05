@@ -2,7 +2,10 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsInt, IsOptional, Min } from 'class-validator';
 
 export class UpdateCompanyPolicyDto {
-  @ApiPropertyOptional({ example: 21, description: 'İllik məzuniyyət günləri' })
+  @ApiPropertyOptional({
+    example: 21,
+    description: 'İllik məzuniyyət günləri (şirkət üzrə)',
+  })
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -18,7 +21,7 @@ export class UpdateCompanyPolicyDto {
 
   @ApiPropertyOptional({
     example: 5,
-    description: 'Ay ərzində maksimal remote günləri (default)',
+    description: 'Ay ərzində maksimal remote günləri',
   })
   @IsOptional()
   @IsInt()
@@ -27,7 +30,7 @@ export class UpdateCompanyPolicyDto {
 
   @ApiPropertyOptional({
     example: 8,
-    description: 'Short leave üçün aylıq maksimal saat',
+    description: 'Short leave üçün aylıq maksimal saat limiti',
   })
   @IsOptional()
   @IsInt()
@@ -41,4 +44,14 @@ export class UpdateCompanyPolicyDto {
   @IsOptional()
   @IsBoolean()
   allowOverlap?: boolean;
+
+  @ApiPropertyOptional({
+    example: 14,
+    description:
+      'ANNUAL_LEAVE üçün minimal əvvəlcədən xəbərdarlıq müddəti (günlə). 0 = limit yoxdur.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  minAdvanceDaysForAnnualLeave?: number;
 }

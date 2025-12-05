@@ -189,7 +189,7 @@ export class PermissionsController {
   }
 
   @Get('admin/:id/audit-log')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR)
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HEAD_OF_HR, UserRole.HR)
   @ApiOperation({
     summary:
       'Verilmiş permission üçün bütün audit log tarixçəsini qaytarır (approve/reject cəhdləri, success/fail)',
