@@ -72,6 +72,9 @@ export class User {
   @Column({ type: 'timestamp', nullable: true })
   refreshTokenExpires?: Date | null;
 
+  @Column({ nullable: true })
+  fcmToken?: string;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
 

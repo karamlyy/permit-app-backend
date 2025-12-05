@@ -15,6 +15,8 @@ import { PermissionApprovalService } from './permission-approval.service';
 import { PermissionQueryService } from './permission-query.service';
 import { PermissionBalanceService } from './permission-balance.service';
 import { PermissionAuditService } from './permission-audit.service';
+import { PermissionsNotificationService } from './permissions-notification.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -26,6 +28,7 @@ import { PermissionAuditService } from './permission-audit.service';
       Department,
       PermissionAudit,
     ]),
+    NotificationsModule,
   ],
   providers: [
     PermissionsService,
@@ -36,6 +39,7 @@ import { PermissionAuditService } from './permission-audit.service';
     PermissionQueryService,
     PermissionBalanceService,
     PermissionAuditService,
+    PermissionsNotificationService,
   ],
   controllers: [PermissionsController],
 })

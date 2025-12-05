@@ -22,6 +22,7 @@ import { PermissionApprovalService } from './permission-approval.service';
 import { PermissionPolicyService } from './permission-policy.service';
 import { PermissionBalanceService } from './permission-balance.service';
 import { PermissionAuditService } from './permission-audit.service';
+import { PermissionsNotificationService } from './permissions-notification.service';
 
 @Injectable()
 export class PermissionsService {
@@ -37,6 +38,7 @@ export class PermissionsService {
     private readonly policyService: PermissionPolicyService,
     private readonly balanceService: PermissionBalanceService,
     private readonly auditService: PermissionAuditService,
+    private readonly notificationService: PermissionsNotificationService,
   ) {}
 
   // EMPLOYEE: özün üçün icazə yarat
@@ -84,7 +86,16 @@ export class PermissionsService {
       status: PermissionStatus.PENDING,
     });
 
-    return this.permRepo.save(perm);
+    const saved = await this.permRepo.save(perm);
+
+    // Notification göndər (async, error-lar log olunur)
+    this.notificationService
+      .notifyOnPermissionCreated(saved)
+      .catch((error) => {
+        // Error-lar notification service-də log olunur, burada sadəcə catch edirik
+      });
+
+    return saved;
   }
 
   // EMPLOYEE: öz icazələrini gör

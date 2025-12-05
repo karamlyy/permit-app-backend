@@ -19,6 +19,7 @@ import { PermissionChainService } from './permission-chain.service';
 import { PermissionAuditService } from './permission-audit.service';
 import { PermissionQueryService } from './permission-query.service';
 import { PermissionHelpersService } from './permission-helpers.service';
+import { PermissionsNotificationService } from './permissions-notification.service';
 
 @Injectable()
 export class PermissionApprovalService {
@@ -33,6 +34,7 @@ export class PermissionApprovalService {
     private readonly auditService: PermissionAuditService,
     private readonly queryService: PermissionQueryService,
     private readonly helpersService: PermissionHelpersService,
+    private readonly notificationService: PermissionsNotificationService,
   ) {}
 
   async approve(
@@ -305,6 +307,16 @@ export class PermissionApprovalService {
       reason: dto.comment,
     });
 
+    // 10) Notification göndər
+    const historyWithNewStep = await this.chainService.getApprovalHistory(
+      saved.id,
+    );
+    this.notificationService
+      .notifyOnApprovedStep(saved, chain, historyWithNewStep)
+      .catch((error) => {
+        // Error-lar notification service-də log olunur
+      });
+
     return saved;
   }
 
@@ -555,6 +567,13 @@ export class PermissionApprovalService {
       newStatus: saved.status,
       reason: dto.comment,
     });
+
+    // 10) Notification göndər
+    this.notificationService
+      .notifyOnRejected(saved, dto.comment)
+      .catch((error) => {
+        // Error-lar notification service-də log olunur
+      });
 
     return saved;
   }
