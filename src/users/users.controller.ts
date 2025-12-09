@@ -226,4 +226,37 @@ Filter-lər:
       dto.fcmToken,
     );
   }
+
+  @Get('users/me')
+  @ApiOperation({
+    summary: 'Hazırkı istifadəçinin öz profil məlumatını qaytarır',
+  })
+  @ApiOkResponse({
+    description: 'Hazırkı istifadəçinin profili qaytarılır',
+    type: UserResponseDto,
+  })
+  getMe(@CurrentUser() currentUser: any): Promise<UserResponseDto> {
+    return this.usersService.getMe(currentUser.userId);
+  }
+
+
+  @Get('me/department/users')
+  @Roles(UserRole.MANAGER, UserRole.HEAD_OF_DEPARTMENT)
+  @ApiOperation({
+    summary: 'Hazırkı istifadəçinin aid olduğu departamentdəki işçiləri qaytarır',
+    description:
+      'Manager və Head of Department yalnız öz departamentində olan işçilərin siyahısını görür',
+  })
+  @ApiOkResponse({
+    description: 'Departament üzrə işçilər qaytarılır',
+    type: UserResponseDto,
+    isArray: true,
+  })
+  getUsersInMyDepartment(@CurrentUser() currentUser: any): Promise<UserResponseDto[]> {
+    return this.usersService.getUsersInMyDepartment({
+      userId: currentUser.userId,
+      companyId: currentUser.companyId,
+      role: currentUser.role,
+    });
+  }
 }

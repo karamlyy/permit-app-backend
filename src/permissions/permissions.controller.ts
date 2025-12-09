@@ -26,13 +26,14 @@ import { UserRole } from '../common/enums/user-role.enum';
 import { LeaveBalanceDto } from './dto/leave-balance.dto';
 import { PermissionAuditDto } from './dto/permission-audit.dto';
 import { PermissionDetailsDto } from './dto/permission-details.dto';
+import { PermissionListItemDto } from './dto/permission-list-item.dto';
 
 @ApiTags('permissions')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller('permissions')
 export class PermissionsController {
-  constructor(private readonly permissionsService: PermissionsService) {}
+  constructor(private readonly permissionsService: PermissionsService) { }
 
   // Employee özün üçün icazə yaradır
   @Post()
@@ -215,34 +216,61 @@ export class PermissionsController {
 
 
   @Get(':id/details')
-@Roles(
-  UserRole.EMPLOYEE,
-  UserRole.MANAGER,
-  UserRole.HEAD_OF_DEPARTMENT,
-  UserRole.HR,
-  UserRole.HEAD_OF_HR,
-  UserRole.COMPANY_ADMIN,
-)
-@ApiOperation({
-  summary: 'İcazənin tam detallarını qaytarır (chain, history, hazırda kimdədir)',
-})
-@ApiOkResponse({
-  description: 'İcazə detalları qaytarılır',
-  type: PermissionDetailsDto,
-})
-getPermissionDetails(
-  @CurrentUser() user: any,
-  @Param('id', ParseIntPipe) id: number,
-): Promise<PermissionDetailsDto> {
-  return this.permissionsService.getPermissionDetails(
-    {
+  @Roles(
+    UserRole.EMPLOYEE,
+    UserRole.MANAGER,
+    UserRole.HEAD_OF_DEPARTMENT,
+    UserRole.HR,
+    UserRole.HEAD_OF_HR,
+    UserRole.COMPANY_ADMIN,
+  )
+  @ApiOperation({
+    summary: 'İcazənin tam detallarını qaytarır (chain, history, hazırda kimdədir)',
+  })
+  @ApiOkResponse({
+    description: 'İcazə detalları qaytarılır',
+    type: PermissionDetailsDto,
+  })
+  getPermissionDetails(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<PermissionDetailsDto> {
+    return this.permissionsService.getPermissionDetails(
+      {
+        userId: user.userId,
+        companyId: user.companyId,
+        role: user.role,
+      },
+      id,
+    );
+  }
+
+  @Get('my-approval-queue')
+  @Roles(
+    UserRole.COMPANY_ADMIN,
+    UserRole.HR,
+    UserRole.HEAD_OF_HR,
+    UserRole.MANAGER,
+    UserRole.HEAD_OF_DEPARTMENT,
+  )
+  @ApiOperation({
+    summary:
+      'Hazırkı approver üçün hazırda onun növbəsində olan icazələr (approval queue)',
+    description:
+      'Bu endpoint yalnız sənin roluna görə növbəndə olan icazələri qaytarır. MANAGER/HEAD_OF_DEPARTMENT yalnız öz departament sahəsindəki icazələri görür.',
+  })
+  @ApiOkResponse({
+    description: 'Approval queue qaytarılır',
+    type: PermissionListItemDto,
+    isArray: true,
+  })
+  getMyApprovalQueue(@CurrentUser() user: any) {
+    return this.permissionsService.getMyApprovalQueue({
       userId: user.userId,
       companyId: user.companyId,
       role: user.role,
-    },
-    id,
-  );
-}
+    });
+  }
 
-  
+
 }

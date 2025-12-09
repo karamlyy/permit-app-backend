@@ -125,3 +125,4 @@ export class FcmNotificationService implements OnModuleInit {
     await this.sendToToken(user.fcmToken, title, body, data);
   }
 }
+

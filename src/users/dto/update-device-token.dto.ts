@@ -10,3 +10,4 @@ export class UpdateDeviceTokenDto {
   @IsString()
   fcmToken: string;
 }
+

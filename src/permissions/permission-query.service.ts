@@ -7,6 +7,7 @@ import { UserRole } from '../common/enums/user-role.enum';
 import { PermissionDetailsDto, PermissionApprovalStepDto, PermissionChainStepDto, PermissionEmployeeDto } from './dto/permission-details.dto';
 import { PermissionStatus } from '../common/enums/permission-status.enum';
 import { PermissionChainService } from './permission-chain.service';
+import { PermissionListItemDto } from './dto/permission-list-item.dto';
 
 @Injectable()
 export class PermissionQueryService {
@@ -16,7 +17,7 @@ export class PermissionQueryService {
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly chainService: PermissionChainService,
-  ) {}
+  ) { }
 
   async findMyPermissions(currentUser: {
     userId: number;
@@ -276,5 +277,136 @@ export class PermissionQueryService {
 
     return details;
   }
+
+  async getMyApprovalQueue(
+    currentUser: { userId: number; companyId: number; role: UserRole },
+  ): Promise<PermissionListItemDto[]> {
+    // Bu endpointi yalnız approver rollar görə bilir
+    const approverRoles: UserRole[] = [
+      UserRole.COMPANY_ADMIN,
+      UserRole.HR,
+      UserRole.HEAD_OF_HR,
+      UserRole.MANAGER,
+      UserRole.HEAD_OF_DEPARTMENT,
+    ];
+
+    if (!approverRoles.includes(currentUser.role)) {
+      throw new ForbiddenException('Approval queue üçün səlahiyyət yoxdur');
+    }
+
+    // 1) Bazada PENDING / IN_PROGRESS icazələri götürmək üçün query builder
+    const qb = this.permRepo
+      .createQueryBuilder('perm')
+      .leftJoinAndSelect('perm.employee', 'employee')
+      .leftJoinAndSelect('employee.department', 'department')
+      .leftJoin('perm.company', 'company')
+      .where('company.id = :companyId', {
+        companyId: currentUser.companyId,
+      })
+      .andWhere('perm.status IN (:...statuses)', {
+        statuses: [PermissionStatus.PENDING, PermissionStatus.IN_PROGRESS],
+      });
+
+    // 2) Role-a görə scope
+    if (
+      currentUser.role === UserRole.COMPANY_ADMIN ||
+      currentUser.role === UserRole.HR ||
+      currentUser.role === UserRole.HEAD_OF_HR
+    ) {
+      // full company scope – əlavə filter yoxdur
+    } else if (currentUser.role === UserRole.HEAD_OF_DEPARTMENT) {
+      const head = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['headedDepartments'],
+      });
+
+      if (!head) {
+        throw new ForbiddenException('Head of Department tapılmadı');
+      }
+
+      const headedDeptIds = (head.headedDepartments || []).map((d) => d.id);
+      if (headedDeptIds.length === 0) {
+        return [];
+      }
+
+      qb.andWhere('department.id IN (:...deptIds)', {
+        deptIds: headedDeptIds,
+      });
+    } else if (currentUser.role === UserRole.MANAGER) {
+      const manager = await this.usersRepo.findOne({
+        where: { id: currentUser.userId },
+        relations: ['managedDepartments'],
+      });
+
+      if (!manager) {
+        throw new ForbiddenException('Manager tapılmadı');
+      }
+
+      const managedDeptIds = (manager.managedDepartments || []).map(
+        (d) => d.id,
+      );
+      if (managedDeptIds.length === 0) {
+        return [];
+      }
+
+      qb.andWhere('department.id IN (:...deptIds)', {
+        deptIds: managedDeptIds,
+      });
+    }
+
+    const perms = await qb.orderBy('perm.createdAt', 'DESC').getMany();
+
+    const result: PermissionListItemDto[] = [];
+
+    for (const perm of perms) {
+      // Öz icazəsini approve etməsin (queue-də də göstərməyək)
+      if (perm.employee.id === currentUser.userId) {
+        continue;
+      }
+
+      // Chain + history
+      const chainRoles =
+        await this.chainService.getApprovalChainForPermission(
+          currentUser.companyId,
+          perm.employee,
+          perm.type,
+        );
+
+      const history = await this.chainService.getApprovalHistory(perm.id);
+
+      // Bu icazə artıq APPROVED/REJECTED olmamalıdır, amma defensively check edirik
+      if (
+        perm.status !== PermissionStatus.PENDING &&
+        perm.status !== PermissionStatus.IN_PROGRESS
+      ) {
+        continue;
+      }
+
+      // Növbəti step (0-based index)
+      const nextStepIndex = history.length;
+      const nextRole = chainRoles[nextStepIndex] ?? null;
+
+      // Bu icazə hal-hazırda bu user-in rolunda deyil → skip
+      if (!nextRole || nextRole !== currentUser.role) {
+        continue;
+      }
+
+      const dto = new PermissionListItemDto();
+      dto.id = perm.id;
+      dto.type = perm.type;
+      dto.status = perm.status;
+      dto.createdAt = perm.createdAt;
+      dto.employeeName = perm.employee.name;
+      dto.employeeEmail = perm.employee.email;
+      dto.employeeDepartmentName = perm.employee.department?.name;
+      dto.currentHolderRole = nextRole;
+      dto.isMyTurn = true;
+
+      result.push(dto);
+    }
+
+    return result;
+  }
+
 }
 

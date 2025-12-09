@@ -334,4 +334,56 @@ export class UsersService {
 
     return { message: 'Device token uğurla yeniləndi' };
   }
+
+  async getMe(userId: number): Promise<UserResponseDto> {
+    const user = await this.usersRepo.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    return this.toUserResponse(user);
+  }
+
+  async getUsersInMyDepartment(
+    currentUser: { userId: number; companyId: number; role: UserRole },
+  ): Promise<UserResponseDto[]> {
+    // 1) İstifadəçinin özünü departamenti ilə birlikdə tapırıq
+    const me = await this.usersRepo.findOne({
+      where: { id: currentUser.userId },
+      relations: ['company', 'department'],
+    });
+
+    if (!me || me.company.id !== currentUser.companyId) {
+      throw new NotFoundException('İstifadəçi tapılmadı');
+    }
+
+    // 2) Bu funksiyanı yalnız departament rəhbərliyi üçün açırıq
+    if (
+      ![UserRole.MANAGER, UserRole.HEAD_OF_DEPARTMENT].includes(me.role)
+    ) {
+      throw new ForbiddenException(
+        'Yalnız Manager və Head of Department öz departamentindəki işçiləri görə bilər',
+      );
+    }
+
+    if (!me.department) {
+      throw new ForbiddenException(
+        'Hər hansı bir departamentə aid deyilsən, siyahı göstərilə bilməz',
+      );
+    }
+
+    // 3) Eyni company + eyni department-lə olan bütün userləri qaytarırıq
+    const users = await this.usersRepo.find({
+      where: {
+        company: { id: currentUser.companyId },
+        department: { id: me.department.id },
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    return users.map((u) => this.toUserResponse(u));
+  }
 }

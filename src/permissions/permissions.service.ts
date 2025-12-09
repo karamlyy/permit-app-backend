@@ -23,6 +23,7 @@ import { PermissionPolicyService } from './permission-policy.service';
 import { PermissionBalanceService } from './permission-balance.service';
 import { PermissionAuditService } from './permission-audit.service';
 import { PermissionsNotificationService } from './permissions-notification.service';
+import { PermissionListItemDto } from './dto/permission-list-item.dto';
 
 @Injectable()
 export class PermissionsService {
@@ -283,5 +284,13 @@ export class PermissionsService {
     permissionId: number,
   ): Promise<PermissionDetailsDto> {
     return this.queryService.getPermissionDetails(currentUser, permissionId);
+  }
+
+  async getMyApprovalQueue(currentUser: {
+    userId: number;
+    companyId: number;
+    role: UserRole;
+  }): Promise<PermissionListItemDto[]> {
+    return this.queryService.getMyApprovalQueue(currentUser);
   }
 }
